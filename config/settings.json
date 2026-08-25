@@ -1,0 +1,79 @@
+{
+  "league": "WNBA",
+  "season": 2026,
+  "timezone": "America/Toronto",
+  "currency_symbol": "C$",
+  "refresh": {
+    "lookback_days": 4,
+    "lookahead_days": 8,
+    "max_odds_age_hours": 12,
+    "source": "ESPN public feed",
+    "key_required": false
+  },
+  "bankroll": {
+    "starting": 200.0,
+    "kelly_fraction": 0.5,
+    "max_stake_pct": 0.30,
+    "max_stake": 60.0,
+    "min_stake": 5.0,
+    "round_stake_to": 0.5,
+    "max_daily_exposure_pct": 0.35
+  },
+  "tiers": {
+    "best_bet": 0.08,
+    "good": 0.05,
+    "lean": 0.03,
+    "best_bet_min_confidence": 0.78,
+    "best_bet_min_line_gap": 1.0,
+    "best_bet_max_line_gap": 8.0,
+    "best_bet_min_price": -250
+  },
+  "model": {
+    "home_court_points": 2.5,
+    "power_rating_weight": 0.35,
+    "recent_form_scale": 8.0,
+    "recent_form_weight": 0.4,
+    "split_scale": 5.0,
+    "split_weight": 0.35,
+    "rest_points_per_day": 0.5,
+    "max_rest_adjustment": 2.0,
+    "injury_weight": 1.0,
+    "injury_total_weight": 0.25,
+    "spread_sigma": 11.0,
+    "total_sigma": 11.0,
+    "projection_blend": 0.55,
+    "total_blend": 0.50,
+    "max_spread_disagreement": 8.0,
+    "max_total_disagreement": 12.0,
+    "edge_compression": 0.12,
+    "selection_haircut": 0.01,
+    "rating_ridge": 12.0,
+    "rating_mov_cap": 24.0,
+    "min_games_for_full_confidence": 10
+  },
+  "injuries": {
+    "status_weight": {
+      "out": 1.0,
+      "doubtful": 0.7,
+      "questionable": 0.25,
+      "day-to-day": 0.15,
+      "game time decision": 0.35,
+      "active": 0.0
+    },
+    "position_points": {
+      "G": 0.9,
+      "F": 0.75,
+      "C": 0.8,
+      "default": 0.7
+    },
+    "max_team_points": 5.0,
+    "uncertainty_confidence_penalty": 0.05
+  },
+  "filters": {
+    "min_confidence": 0.70,
+    "min_price": -350,
+    "max_price": 550,
+    "max_bets_per_game": 1,
+    "bet_started_games": false
+  }
+}

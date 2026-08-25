@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="description" content="Automatic WNBA projections, live market prices, edges, simulator, ledger and accuracy tracking in the MLB Edge Desk design.">
+  <meta property="og:title" content="WNBA Edge Lab">
+  <meta property="og:description" content="Automatic WNBA projections, live market prices, edges, simulator, ledger and accuracy tracking.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://chillychilly14.github.io/wnba-edge-lab/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="WNBA Edge Lab">
+  <meta name="twitter:description" content="Automatic WNBA projections, live market prices, edges, simulator, ledger and accuracy tracking.">
+  <meta name="twitter:image" content="https://chillychilly14.github.io/wnba-edge-lab/og.png">
+  <title>WNBA Edge Desk</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="mast">
+    <div class="mast-in">
+      <div class="brand"><h1>WNBA EDGE DESK</h1><span class="sub">AUTOMATIC MODEL · LIVE DATA</span></div>
+      <div class="mast-right"><div class="stamp" id="stamp">loading live feed…</div><button class="iconbtn" id="theme" type="button" aria-label="Toggle colour theme">Theme</button></div>
+    </div>
+  </header>
+  <div class="health" id="health" hidden></div>
+  <div class="kpis" id="kpis"></div>
+  <div class="weekbar">
+    <label for="dateSelect">Selected slate date</label>
+    <button class="iconbtn" id="prevDate" type="button" aria-label="Previous available date">←</button>
+    <select id="dateSelect" aria-label="Selected slate date"></select>
+    <button class="iconbtn" id="nextDate" type="button" aria-label="Next available date">→</button>
+    <button class="iconbtn" id="today" type="button">Today</button>
+    <span class="now" id="dateNote"></span>
+  </div>
+  <nav class="tabs" id="tabs" aria-label="WNBA model views"></nav>
+  <main class="wrap" id="view"><div class="empty">Loading automatic WNBA board…</div></main>
+  <script src="app.js"></script>
+</body>
+</html>
