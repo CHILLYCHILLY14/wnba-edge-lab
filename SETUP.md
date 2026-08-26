@@ -22,3 +22,14 @@ The offline option uses only the latest successfully fetched real-data cache:
 ```bash
 python -m pipeline.build --offline
 ```
+
+## Using My Ledger
+
+1. Open **Best Bets** and verify the displayed price is still available at the
+   named sportsbook.
+2. If you place the wager, enter the amount you actually risked and click
+   **Add to My Ledger**.
+3. Open **My Ledger** to review pending and settled wagers. Model picks you did
+   not confirm never appear there.
+4. Use **Export JSON** for a restorable backup or **Export CSV** for a
+   spreadsheet copy. Browser storage is device-specific.

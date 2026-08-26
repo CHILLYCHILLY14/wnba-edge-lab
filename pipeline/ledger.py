@@ -1,4 +1,9 @@
-"""Immutable bet ledger and shadow-book grading from final ESPN scores."""
+"""Model shadow-book grading from final ESPN scores.
+
+The published site never auto-adds a model pick to the user's ledger. Actual
+wagers live only in the browser ledger after the user clicks Add. This module
+keeps the separate shadow book needed to audit every model tier honestly.
+"""
 
 from __future__ import annotations
 
@@ -69,17 +74,12 @@ def sync(candidates: list[dict], games: list[dict], ledger_state: dict | None,
          shadow_state: dict | None) -> tuple[dict, dict]:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     game_map = {game["game_id"]: game for game in games}
-    ledger = ledger_state or {"bets": []}
+    # Previous releases wrote qualifying model picks here automatically. Clear
+    # that generated list during the first refresh after this migration. The
+    # actual wager ledger is now explicit browser-local state, like MLB Edge.
+    ledger = {"bets": [], "mode": "manual-browser"}
     shadow = shadow_state or {"calls": []}
-    ledger.setdefault("bets", [])
     shadow.setdefault("calls", [])
-
-    # Lock each real qualified play once. A later line move never rewrites it.
-    existing = {row["id"] for row in ledger["bets"]}
-    for row in candidates:
-        if row["tier"] != "AVOID" and float(row.get("stake") or 0.0) > 0 and row["candidate_id"] not in existing:
-            ledger["bets"].append(_lock(row, now))
-            existing.add(row["candidate_id"])
 
     # The shadow book records every priced side so tier quality can be tested.
     shadow_existing = {row["id"] for row in shadow["calls"]}
@@ -88,19 +88,18 @@ def sync(candidates: list[dict], games: list[dict], ledger_state: dict | None,
             shadow["calls"].append(_lock(row, now, shadow=True))
             shadow_existing.add(row["candidate_id"])
 
-    for collection in (ledger["bets"], shadow["calls"]):
-        for row in collection:
-            if row.get("result") not in {None, "Pending"}:
-                continue
-            game = game_map.get(row["game_id"])
-            if not game:
-                continue
-            result = _result(row, game)
-            if result:
-                row["result"] = result
-                row["profit"] = round(_profit(float(row["stake"]), float(row["price"]), result), 2)
-                row["graded_at"] = now
-                row["final_score"] = f'{int(game["away"]["score"])}-{int(game["home"]["score"])}'
+    for row in shadow["calls"]:
+        if row.get("result") not in {None, "Pending"}:
+            continue
+        game = game_map.get(row["game_id"])
+        if not game:
+            continue
+        result = _result(row, game)
+        if result:
+            row["result"] = result
+            row["profit"] = round(_profit(float(row["stake"]), float(row["price"]), result), 2)
+            row["graded_at"] = now
+            row["final_score"] = f'{int(game["away"]["score"])}-{int(game["home"]["score"])}'
     ledger["updated_at"] = now
     shadow["updated_at"] = now
     return ledger, shadow

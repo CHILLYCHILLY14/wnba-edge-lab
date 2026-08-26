@@ -71,6 +71,9 @@ class TestOdds(unittest.TestCase):
         away, home = model.devig(150, -175)
         self.assertAlmostEqual(away + home, 1.0, places=9)
 
+    def test_incomplete_market_has_no_fair_probability(self):
+        self.assertEqual(model.devig(-110, None), (None, None))
+
     def test_positive_kelly_only_for_value(self):
         self.assertGreater(model.kelly_fraction(.60, -110), 0)
         self.assertEqual(model.kelly_fraction(.45, -110), 0)
@@ -125,7 +128,16 @@ class TestPricingAndPortfolio(unittest.TestCase):
         model.allocate_portfolio(rows, CFG)
         self.assertTrue(all(row["stake"] == 0 for row in rows if row["tier"] == "AVOID"))
 
-    def test_daily_exposure_and_one_play_per_game(self):
+    def test_edge_is_measured_against_no_vig_market(self):
+        g = game()
+        p = projection(g)
+        p.update({"margin": 0.0, "total": 160.5, "market_total": 160.5, "line_gap": -4.0})
+        rows = model.price_game(g, p, CFG)
+        home = next(row for row in rows if row["market"] == "ML" and row["side"] == "home")
+        self.assertAlmostEqual(home["edge_raw"], home["model_prob"] / home["market_fair_prob"] - 1, places=4)
+        self.assertIn("edge_real", home)
+
+    def test_daily_exposure_and_one_side_plus_one_total_per_game(self):
         rows = []
         for idx in range(4):
             g = game(str(idx))
@@ -134,7 +146,9 @@ class TestPricingAndPortfolio(unittest.TestCase):
         selected = [row for row in rows if row["stake"] > 0]
         cap = CFG["bankroll"]["starting"] * CFG["bankroll"]["max_daily_exposure_pct"]
         self.assertLessEqual(sum(row["stake"] for row in selected), cap)
-        self.assertEqual(len({row["game_id"] for row in selected}), len(selected))
+        slots={(row["game_id"],"TOTAL" if row["market"]=="TOTAL" else "SIDE") for row in selected}
+        self.assertEqual(len(slots),len(selected))
+        self.assertLessEqual(sum(row["game_id"]=="0" for row in selected),2)
 
 
 class TestLedger(unittest.TestCase):
@@ -144,24 +158,32 @@ class TestLedger(unittest.TestCase):
         model.allocate_portfolio(rows, CFG)
         return next(row for row in rows if row["stake"] > 0)
 
-    def test_duplicate_play_is_not_added_twice(self):
+    def test_qualified_play_is_not_auto_added(self):
         row = self.selected_row()
         first, shadow = ledger.sync([row], [game()], {"bets": []}, {"calls": []})
-        second, _ = ledger.sync([row], [game()], first, shadow)
-        self.assertEqual(len(second["bets"]), 1)
+        self.assertEqual(first["bets"], [])
+        self.assertEqual(first["mode"], "manual-browser")
+        self.assertEqual(len(shadow["calls"]), 1)
 
-    def test_final_score_grades_locked_play(self):
+    def test_shadow_call_is_duplicate_proof_and_graded(self):
         row = self.selected_row()
         state, shadow = ledger.sync([row], [game()], {"bets": []}, {"calls": []})
+        _, shadow = ledger.sync([row], [game()], state, shadow)
+        self.assertEqual(len(shadow["calls"]), 1)
         final = game(status="post", completed=True)
         final["away"]["score"], final["home"]["score"] = 75, 90
-        graded, _ = ledger.sync([], [final], state, shadow)
-        self.assertIn(graded["bets"][0]["result"], {"Win", "Loss", "Push"})
+        _, graded_shadow = ledger.sync([], [final], state, shadow)
+        self.assertIn(graded_shadow["calls"][0]["result"], {"Win", "Loss", "Push"})
 
 
 class TestFeedParser(unittest.TestCase):
     def test_odds_parser_requires_a_real_price_block(self):
         self.assertIsNone(espn.parse_odds([], "SEA", "NY"))
+
+    def test_line_without_price_does_not_invent_minus_110(self):
+        payload = [{"provider": {"name": "Feed", "priority": 1}, "spread": 4.5, "details": "NY -4.5"}]
+        parsed = espn.parse_odds(payload, "SEA", "NY")
+        self.assertIsNone(parsed)
 
 
 if __name__ == "__main__":

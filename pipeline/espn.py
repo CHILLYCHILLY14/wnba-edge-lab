@@ -55,15 +55,15 @@ def _open(block: dict | None) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _quote(block: dict | None, fallback_line=None, fallback_price=-110) -> dict | None:
+def _quote(block: dict | None, fallback_line=None, fallback_price=None) -> dict | None:
     if not isinstance(block, dict):
         return None
     close, opened = _close(block), _open(block)
     price = _num(close.get("odds") or close.get("american") or block.get("odds"))
     line = _num(close.get("line") or close.get("pointSpread") or fallback_line)
-    if price is None:
+    if price is None and fallback_price is not None:
         price = _num(fallback_price)
-    if price is None:
+    if price is None or not (100 <= abs(price) <= 5000):
         return None
     return {
         "line": line,
@@ -92,14 +92,8 @@ def parse_odds(odds_list: list | None, away: str, home: str) -> dict | None:
     over = _quote(total.get("over"), odds.get("overUnder"), None)
     under = _quote(total.get("under"), odds.get("overUnder"), None)
 
-    # Legacy payloads expose the line but not the nested price blocks.
-    if away_spread is None or home_spread is None:
-        magnitude = abs(_num(odds.get("spread")) or 0.0)
-        favourite = str(odds.get("details") or "").split(" ")[0].upper()
-        away_line = -magnitude if favourite == away else magnitude
-        home_line = -away_line
-        away_spread = away_spread or _quote({"line": away_line, "odds": -110})
-        home_spread = home_spread or _quote({"line": home_line, "odds": -110})
+    # A line without an offered price is reference information only. Do not
+    # invent the traditional -110 price: an unpriced side cannot create edge.
 
     quotes = {
         "away_ml": away_ml,

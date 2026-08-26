@@ -1,7 +1,8 @@
 const DATA="data/";
-const FILES=["board","games","summary","meta","index","ledger","performance","simulator","news"];
+const FILES=["board","games","summary","meta","index","performance","simulator","news"];
+const L=window.WNBALedger;
 const state={tab:"plays",tier:"PLAYS",date:null};
-let board=[],games=[],summary={},meta={},index={},ledger={bets:[]},performance={},simulator={teams:{}},news=[];
+let board=[],games=[],summary={},meta={},index={},performance={},simulator={teams:{}},news=[],myBets=[];
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const pct=(v,d=1)=>v==null?"—":`${(Number(v)*100).toFixed(d)}%`;
@@ -15,6 +16,8 @@ function easternToday(){try{return new Intl.DateTimeFormat("en-CA",{timeZone:"Am
 function selectedGames(){return games.filter(g=>g.date===state.date)}
 function selectedRows(){return board.filter(r=>r.date===state.date)}
 function selectedPlays(){return selectedRows().filter(r=>r.tier!=="AVOID"&&Number(r.stake)>0)}
+function mySummary(){return L?L.summarise(myBets,summary.starting_bankroll||200):{bankroll:summary.starting_bankroll||200,profit:0,pending:0,settled:0,at_risk:0}}
+function isTracked(row){return myBets.some(entry=>L.keyOf(entry)===L.keyOf(row))}
 
 function setHealth(){
   const h=$("#health"),odds=meta.odds_health||{};
@@ -33,13 +36,14 @@ function setHealth(){
 
 function renderKpis(){
   const d=(summary.day_summary||{})[state.date]||{};
+  const mine=mySummary();
   const items=[
-    ["Bankroll",money(summary.bankroll),"settled results only",performance.profit>0?"pos":performance.profit<0?"neg":""],
+    ["My bankroll",money(mine.bankroll),"confirmed wagers only",mine.profit>0?"pos":mine.profit<0?"neg":""],
     ["Qualified",d.plays??0,"selected slate","accent"],
-    ["Exposure",money(d.staked??0),`${money(summary.daily_cap)} daily cap`,(d.staked||0)>summary.daily_cap?"neg":""],
+    ["Suggested risk",money(d.staked??0),`${money(summary.daily_cap)} model cap`,(d.staked||0)>summary.daily_cap?"neg":""],
     ["Games",d.games??0,`${d.priced??0} with prices`,d.priced?"":"warn"],
     ["Markets",d.markets??0,"moneyline · spread · total",""],
-    ["Model P/L",money(performance.profit??0),performance.settled_bets?`${performance.settled_bets} settled`:`needs graded bets`,performance.profit>0?"pos":performance.profit<0?"neg":""],
+    ["My P/L",money(mine.profit),mine.settled?`${mine.settled} settled · ${mine.pending} pending`:`${mine.pending} pending`,mine.profit>0?"pos":mine.profit<0?"neg":""],
   ];
   $("#kpis").innerHTML=items.map(([k,v,n,c])=>`<div class="kpi"><div class="k">${esc(k)}</div><div class="v ${c||""}">${esc(v)}</div><div class="n">${esc(n)}</div></div>`).join("");
 }
@@ -56,7 +60,7 @@ function renderTabs(){
   const tabs=[
     ["plays","Best Bets",selectedPlays().length],["board","Full Board",selectedRows().length],
     ["schedule","Schedule",selectedGames().length],["sim","Simulator",10000],
-    ["ledger","Bet Ledger",(ledger.bets||[]).length],["accuracy","Accuracy",performance.settled_bets||0],
+    ["ledger","My Ledger",myBets.length],["accuracy","Accuracy",Object.values(performance.by_tier||{}).reduce((n,row)=>n+Number(row.settled||0),0)],
     ["model","Model",Object.keys(simulator.teams||{}).length],["sources","Data Sources",meta.errors?.length||0],
   ];
   $("#tabs").innerHTML=tabs.map(([id,label,count])=>`<button type="button" class="${state.tab===id?"on":""}" data-tab="${id}" aria-selected="${state.tab===id}">${esc(label)}<span class="cnt">${count}</span></button>`).join("");
@@ -74,13 +78,20 @@ function injuries(projection){
   const rows=groups.flatMap(([team,block])=>(block?.players||[]).map(p=>`<div class="injury"><b>${esc(team)}</b> · ${esc(p.name)} · ${esc(p.status)} · ${esc(p.detail||p.position)} <span class="num">${p.points?`(${p.points.toFixed(2)} pts)`:""}</span></div>`));
   return rows.length?rows.join(""):`<div class="injury">No listed injury adjustment from the current ESPN game report.</div>`;
 }
+function ledgerControl(row,compact=false){
+  if(row.tier==="AVOID"||!Number(row.stake))return "";
+  if(isTracked(row))return `<span class="tracked">✓ In My Ledger</span>`;
+  const id=esc(row.candidate_id);
+  return `<span class="addbox ${compact?"compact":""}"><label for="stake-${id}">Stake</label><input id="stake-${id}" data-stake="${id}" type="number" min="0.5" step="0.5" value="${Number(row.stake).toFixed(2)}"><button type="button" class="run add-ledger" data-add="${id}">Add to My Ledger</button></span>`;
+}
 function card(row){
   const p=row.projection||{};const game=games.find(g=>g.game_id===row.game_id);const notes=(row.reasons||[]).join(" · ")||row.tier_note||"Qualified at the current live price and inside the daily exposure cap.";
   return `<article class="card ${tierClass(row.tier)}"><div class="cardhead"><div><div class="match">${esc(row.matchup)}</div><div class="meta">${esc(row.start_local)} · ${esc(row.book)} · LIVE PRICE</div></div>${tier(row)}</div><div class="cardbody">
     <div class="pick">${esc(row.pick)} <small>${price(row.price)}</small></div>
     <div class="score"><span>${esc(row.away)} ${num(p.away_score)} – ${esc(row.home)} ${num(p.home_score)}</span><small>MODEL LINE ${p.margin>=0?row.home:row.away} ${Math.abs(Number(p.margin||0)).toFixed(1)} · TOTAL ${num(p.total)}</small></div>
-    <div class="grid4"><div class="metric"><div class="k">Model</div><div class="v">${pct(row.model_prob)}</div></div><div class="metric"><div class="k">Break-even</div><div class="v">${pct(row.breakeven)}</div></div><div class="metric"><div class="k">Edge</div><div class="v">${pct(row.edge)}</div></div><div class="metric"><div class="k">Stake</div><div class="v">${money(row.stake)}</div></div></div>
+    <div class="grid5"><div class="metric"><div class="k">Model</div><div class="v">${pct(row.model_prob)}</div></div><div class="metric"><div class="k">No-vig market</div><div class="v">${pct(row.market_fair_prob)}</div></div><div class="metric"><div class="k">Break-even</div><div class="v">${pct(row.breakeven)}</div></div><div class="metric"><div class="k">Edge</div><div class="v">${pct(row.edge)}</div></div><div class="metric"><div class="k">Stake</div><div class="v">${money(row.stake)}</div></div></div>
     <div class="why"><b>${row.tier==="AVOID"?"Why avoid":"Why it rates"}:</b> ${esc(notes)}${game?.rationale?`<br>${esc(game.rationale)}`:""}</div>
+    ${ledgerControl(row)}
     <details><summary>Projection arithmetic</summary>${factors(p)}</details><details><summary>Live injury report</summary>${injuries(p)}</details>
   </div></article>`;
 }
@@ -89,16 +100,16 @@ function playsView(){
   const rows=selectedPlays();const d=(summary.day_summary||{})[state.date]||{};
   if(!rows.length){
     const why=d.priced?"The model priced the slate, but no market clears the edge, confidence and exposure rules.":d.games?"The schedule is live, but sportsbooks have not posted usable prices for this slate yet.":"No WNBA games are scheduled on this date.";
-    return panelHead("Qualified plays",`Only real, currently priced markets can appear here. Nothing is added to the ledger unless it qualifies.`)+`<div class="empty"><b>No qualified plays for ${esc(dateLabel(state.date))}</b>${esc(why)} No bet is being forced.</div>`;
+    return panelHead("Qualified plays",`Only real, currently priced markets can appear here. Nothing enters My Ledger unless you add it.`)+`<div class="empty"><b>No qualified plays for ${esc(dateLabel(state.date))}</b>${esc(why)} No bet is being forced.</div>`;
   }
-  return panelHead("Qualified plays",`Ranked automatically from the live slate. Stakes use half Kelly and cannot exceed ${money(summary.daily_cap)} total exposure per day.`)+`<div class="cards">${rows.map(card).join("")}</div>`;
+  return panelHead("Qualified plays",`Ranked from the live slate. Review the price first, then add only wagers you actually place. Suggested stakes use half Kelly and cannot exceed ${money(summary.daily_cap)} per day.`)+`<div class="cards">${rows.map(card).join("")}</div>`;
 }
 
 function boardView(){
   const choices=["PLAYS","ALL","BEST BET","GOOD","LEAN","AVOID"];
   let rows=selectedRows();if(state.tier==="PLAYS")rows=rows.filter(r=>r.tier!=="AVOID");else if(state.tier!=="ALL")rows=rows.filter(r=>r.tier===state.tier);
   const filters=`<div class="filters">${choices.map(t=>`<button class="filter ${state.tier===t?"on":""}" data-tier="${t}">${t==="PLAYS"?"Plays only":t}</button>`).join("")}</div>`;
-  const table=rows.length?`<div class="tablewrap"><table><thead><tr><th>Tier</th><th>Game</th><th>Pick</th><th>Book</th><th class="num">Price</th><th class="num">Model</th><th class="num">Break-even</th><th class="num">Raw edge</th><th class="num">Edge</th><th class="num">Confidence</th><th class="num">Stake</th><th>Reason</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${tier(r)}</td><td class="mono">${esc(r.matchup)}</td><td class="mono">${esc(r.pick)}</td><td>${esc(r.book)}</td><td class="num">${price(r.price)}</td><td class="num">${pct(r.model_prob)}</td><td class="num">${pct(r.breakeven)}</td><td class="num">${pct(r.edge_raw)}</td><td class="num">${pct(r.edge)}</td><td class="num">${pct(r.confidence)}</td><td class="num">${money(r.stake)}</td><td>${esc((r.reasons||[]).join(" · ")||r.tier_note||"—")}</td></tr>`).join("")}</tbody></table></div>`:`<div class="empty"><b>No priced markets in this filter</b>Unpriced games remain on the Schedule tab and never become bets.</div>`;
+  const table=rows.length?`<div class="tablewrap"><table><thead><tr><th>Tier</th><th>Game</th><th>Pick</th><th>Book</th><th class="num">Price</th><th class="num">Model</th><th class="num">No-vig market</th><th class="num">Break-even</th><th class="num">Raw model edge</th><th class="num">Edge</th><th class="num">Confidence</th><th class="num">Stake</th><th>Ledger</th><th>Reason</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${tier(r)}</td><td class="mono">${esc(r.matchup)}</td><td class="mono">${esc(r.pick)}</td><td>${esc(r.book)}</td><td class="num">${price(r.price)}</td><td class="num">${pct(r.model_prob)}</td><td class="num">${pct(r.market_fair_prob)}</td><td class="num">${pct(r.breakeven)}</td><td class="num">${pct(r.edge_raw)}</td><td class="num">${pct(r.edge)}</td><td class="num">${pct(r.confidence)}</td><td class="num">${money(r.stake)}</td><td>${ledgerControl(r,true)}</td><td>${esc((r.reasons||[]).join(" · ")||r.tier_note||"—")}</td></tr>`).join("")}</tbody></table></div>`:`<div class="empty"><b>No priced markets in this filter</b>Unpriced games remain on the Schedule tab and never become bets.</div>`;
   setTimeout(()=>document.querySelectorAll("[data-tier]").forEach(b=>b.onclick=()=>{state.tier=b.dataset.tier;renderView();}),0);
   return panelHead("Every priced side","AVOID rows remain visible so a quiet board is explainable instead of looking broken.")+filters+table;
 }
@@ -137,21 +148,24 @@ function simulatorView(){
 }
 
 function ledgerView(){
-  const rows=(ledger.bets||[]).slice().sort((a,b)=>String(b.tipoff).localeCompare(String(a.tipoff)));const table=rows.length?`<div class="tablewrap"><table><thead><tr><th>Date</th><th>Game</th><th>Bet</th><th>Tier</th><th class="num">Price</th><th class="num">Edge</th><th class="num">Stake</th><th>Result</th><th class="num">P/L</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.date)}</td><td class="mono">${esc(r.matchup)}</td><td class="mono">${esc(r.pick)}</td><td><span class="tier ${tierClass(r.tier)}">${esc(r.tier)}</span></td><td class="num">${price(r.price)}</td><td class="num">${pct(r.edge)}</td><td class="num">${money(r.stake)}</td><td><span class="res ${esc(r.result)}">${esc(r.result)}</span></td><td class="num ${Number(r.profit)>0?"pos":Number(r.profit)<0?"neg":""}">${money(r.profit)}</td></tr>`).join("")}</tbody></table></div>`:`<div class="empty"><b>No ledger entries yet</b>The ledger fills automatically when a live, priced play qualifies. Nothing is entered from a sample slate.</div>`;
-  return panelHead("Automatic bet ledger","Qualified entries are locked once, duplicate-proofed and graded from final ESPN scores. Later line moves never rewrite history.")+table;
+  const mine=mySummary();
+  const controls=`<div class="ledger-tools"><button type="button" class="iconbtn" data-export="json">Export JSON</button><button type="button" class="iconbtn" data-export="csv">Export CSV</button><label class="iconbtn importbtn">Import JSON<input id="ledgerImport" type="file" accept="application/json,.json" hidden></label>${myBets.length?`<button type="button" class="iconbtn danger" data-clear-ledger>Clear ledger</button>`:""}</div>`;
+  const stats=`<div class="stats"><article class="stat"><h3>Bankroll</h3><div class="big">${money(mine.bankroll)}</div><p>${money(summary.starting_bankroll||200)} start</p></article><article class="stat"><h3>Record</h3><div class="big">${mine.wins}-${mine.losses}-${mine.pushes}</div><p>${mine.pending} pending</p></article><article class="stat"><h3>Net P/L</h3><div class="big ${mine.profit>0?"pos":mine.profit<0?"neg":""}">${money(mine.profit)}</div><p>${mine.roi==null?"needs settled wagers":pct(mine.roi)+" ROI"}</p></article><article class="stat"><h3>At risk</h3><div class="big">${money(mine.at_risk)}</div><p>confirmed pending wagers</p></article></div>`;
+  const rows=myBets.slice().sort((a,b)=>String(b.tipoff).localeCompare(String(a.tipoff)));const table=rows.length?`<div class="tablewrap" style="margin-top:14px"><table><thead><tr><th>Date</th><th>Game</th><th>Bet</th><th>Tier</th><th class="num">Price</th><th class="num">Edge</th><th class="num">Stake</th><th>Result</th><th class="num">P/L</th><th></th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.date)}</td><td class="mono">${esc(r.matchup)}</td><td class="mono">${esc(r.pick)}</td><td><span class="tier ${tierClass(r.tier)}">${esc(r.tier)}</span></td><td class="num">${price(r.price)}</td><td class="num">${pct(r.edge)}</td><td class="num">${money(r.stake)}</td><td><span class="res ${esc(r.result||"Pending")}">${esc(r.result||"Pending")}</span>${r.final_score?`<small class="block">${esc(r.final_score)}</small>`:""}</td><td class="num ${Number(r.profit)>0?"pos":Number(r.profit)<0?"neg":""}">${r.profit==null?"—":money(r.profit)}</td><td><button type="button" class="removebet" data-remove="${esc(r.id)}" aria-label="Remove ${esc(r.pick)}">Remove</button></td></tr>`).join("")}</tbody></table></div>`:`<div class="empty" style="margin-top:14px"><b>No wagers in My Ledger</b>Review a qualified card and click Add to My Ledger only after you actually place it. Model picks are never added automatically.</div>`;
+  return panelHead("My Ledger","This is your manual wager record, separate from the model's shadow-book accuracy. Confirmed entries keep the price and stake you accepted, then settle from final ESPN scores.",controls)+stats+table;
 }
 
 function accuracyView(){
-  const tierRows=performance.by_tier||{},marketRows=performance.by_market||{};const stats=[
-    ["Current bankroll",money(performance.current_bankroll),`${money(performance.starting_bankroll)} start`],["Settled bets",performance.settled_bets||0,`${performance.pending_bets||0} pending`],["Net P/L",money(performance.profit||0),performance.roi!=null?`${pct(performance.roi)} ROI`:"needs results"],["Risked",money(performance.risked||0),"settled stakes"],
+  const tierRows=performance.by_tier||{},mine=mySummary();const stats=[
+    ["Model calls graded",Object.values(tierRows).reduce((n,row)=>n+Number(row.settled||0),0),"includes AVOID shadow calls"],["My wagers settled",mine.settled,`${mine.pending} pending`],["My net P/L",money(mine.profit),mine.roi!=null?`${pct(mine.roi)} ROI`:"needs results"],["My risked",money(mine.risked||0),"settled confirmed stakes"],
   ];
   const group=(title,rows)=>`<section class="box"><h3 style="margin-top:0">${esc(title)}</h3><div class="tablewrap"><table style="min-width:520px"><thead><tr><th>Group</th><th>Record</th><th class="num">Win rate</th><th class="num">P/L</th><th class="num">ROI</th></tr></thead><tbody>${Object.entries(rows).map(([k,r])=>`<tr><td>${esc(k==="AVOID"?"AVOID / shadow":k)}</td><td class="mono">${esc(r.record)}</td><td class="num">${pct(r.win_pct)}</td><td class="num">${money(r.profit)}</td><td class="num">${pct(r.roi)}</td></tr>`).join("")||`<tr><td colspan="5">Needs graded calls</td></tr>`}</tbody></table></div></section>`;
-  return panelHead("Accuracy & ROI","Every priced call—including AVOID—is frozen in a shadow book so the tier labels can be tested honestly.")+`<div class="stats">${stats.map(([k,v,n])=>`<article class="stat"><h3>${esc(k)}</h3><div class="big">${esc(v)}</div><p>${esc(n)}</p></article>`).join("")}</div><div class="twocol" style="margin-top:14px">${group("Tier performance",tierRows)}${group("Bet-market performance",marketRows)}</div>`;
+  return panelHead("Accuracy & ROI","Every priced model call—including AVOID—is frozen in a separate shadow book so the tier labels can be tested without pretending every recommendation was wagered.")+`<div class="stats">${stats.map(([k,v,n])=>`<article class="stat"><h3>${esc(k)}</h3><div class="big">${esc(v)}</div><p>${esc(n)}</p></article>`).join("")}</div><div style="margin-top:14px">${group("Model tier performance",tierRows)}</div>`;
 }
 
 function modelView(){
   const teams=Object.values(simulator.teams||{}).sort((a,b)=>Number(b.power_rating)-Number(a.power_rating));const table=teams.length?`<div class="tablewrap"><table><thead><tr><th>Rank</th><th>Team</th><th class="num">Power</th><th class="num">Games</th><th class="num">PPG</th><th class="num">Allowed</th><th class="num">Last 10 PPG</th><th class="num">Last 10 allowed</th><th class="num">Win %</th><th class="num">Home %</th><th class="num">Road %</th></tr></thead><tbody>${teams.map((t,i)=>`<tr><td class="num">${i+1}</td><td class="mono">${esc(t.team)}</td><td class="num">${Number(t.power_rating)>=0?"+":""}${num(t.power_rating,2)}</td><td class="num">${t.games}</td><td class="num">${num(t.ppg)}</td><td class="num">${num(t.papg)}</td><td class="num">${num(t.l10_ppg)}</td><td class="num">${num(t.l10_papg)}</td><td class="num">${pct(t.win_pct)}</td><td class="num">${pct(t.home_pct)}</td><td class="num">${pct(t.road_pct)}</td></tr>`).join("")}</tbody></table></div>`:`<div class="empty"><b>No live ratings yet</b>Ratings appear automatically after completed WNBA games are available.</div>`;
-  return panelHead("Model & power ratings","Ratings solve schedule-adjusted margins from completed games. Projections then add opponent defence, recent form, venue splits, rest and current injuries before being anchored to the market.")+table+`<div class="note"><b>Edge safety:</b> Large model/market disagreements are compressed, a 1% selection haircut is applied, and BEST BET also requires confidence, a meaningful—but not extreme—line gap and an acceptable price. The model never upgrades a play merely to fill the page.</div>`;
+  return panelHead("Model & power ratings","Ratings solve schedule-adjusted margins from completed games. Projections then add opponent defence, recent form, venue splits, rest and current injuries before being anchored to the market.")+table+`<div class="note"><b>Edge safety:</b> Qualification compares the model with the complete no-vig two-way market. Actual break-even and realized price value remain separate, extreme edges are compressed, and BEST BET also requires confidence, a meaningful—but not extreme—line gap and an acceptable price. The model never upgrades a play merely to fill the page.</div>`;
 }
 
 function sourcesView(){
@@ -160,19 +174,43 @@ function sourcesView(){
     ["Moneyline, spread and total","DraftKings prices distributed through ESPN's public game feed; only actual posted quotes are priced"],
     ["Injuries and availability","ESPN game summary injury reports for every upcoming game in the active window"],
     ["Power ratings and projections","Calculated locally from completed results; no external prediction or sample data"],
-    ["Ledger and grading","Qualified bets are locked once and settled automatically from ESPN final scores"],
+    ["My Ledger","Only wagers you click are stored in this browser; confirmed entries settle from ESPN final scores"],
+    ["Model accuracy","A separate shadow book grades every priced call, including AVOID, without adding it to My Ledger"],
   ];
   const errors=(meta.errors||[]).map(e=>`<div class="source"><h3 class="neg">Refresh warning</h3><p>${esc(e)}</p></div>`).join("");
   return panelHead("Data sources & refresh health","Everything needed for the board is fetched automatically. No spreadsheet paste, API key, sample slate or manual refresh button is required.")+`<section class="box">${sources.map(([h,p])=>`<div class="source"><h3>${esc(h)}</h3><p>${esc(p)}</p></div>`).join("")}${errors}</section><div class="note"><b>Last successful build:</b> ${esc(new Date(meta.generated_at).toLocaleString())}. The GitHub workflow refreshes several times daily, captures line movement, grades finished games and republishes the site. If a provider is temporarily unavailable, the last real cache is labeled clearly; fabricated fallback bets do not exist.</div>${news.length?`<section class="box"><h3 style="margin-top:0">Latest WNBA news</h3>${news.slice(0,8).map(n=>`<div class="source"><h3>${n.link?`<a href="${esc(n.link)}" target="_blank" rel="noopener" style="color:inherit">${esc(n.headline)}</a>`:esc(n.headline)}</h3><p>${esc(n.description||"")}</p></div>`).join("")}</section>`:""}<div class="footer">Model output only—never a guarantee or instruction to wager. Verify the price at your sportsbook and bet only what you can afford to lose.</div>`;
 }
 
-function renderView(){renderTabs();renderKpis();const views={plays:playsView,board:boardView,schedule:scheduleView,sim:simulatorView,ledger:ledgerView,accuracy:accuracyView,model:modelView,sources:sourcesView};$("#view").innerHTML=(views[state.tab]||playsView)();}
+function saveMyBets(){if(L&&!L.save(myBets))window.alert("This browser blocked local ledger storage. Export your ledger to keep a copy.")}
+function downloadLedger(name,text,type){const blob=new Blob([text],{type});const link=document.createElement("a");link.href=URL.createObjectURL(blob);link.download=name;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(link.href),1000)}
+function bindLedgerActions(){
+  document.querySelectorAll("[data-add]").forEach(button=>button.onclick=()=>{
+    const row=board.find(item=>item.candidate_id===button.dataset.add);if(!row||isTracked(row))return;
+    const input=document.querySelector(`[data-stake="${CSS.escape(row.candidate_id)}"]`);const stake=Number(input?.value);
+    if(!isFinite(stake)||stake<=0){window.alert("Enter the stake you actually placed.");return;}
+    myBets.push(L.entryFrom(row,stake));saveMyBets();renderView();
+  });
+  document.querySelectorAll("[data-remove]").forEach(button=>button.onclick=()=>{
+    if(!window.confirm("Remove this wager from My Ledger?"))return;
+    myBets=myBets.filter(row=>row.id!==button.dataset.remove);saveMyBets();renderView();
+  });
+  document.querySelectorAll("[data-export]").forEach(button=>button.onclick=()=>{
+    if(button.dataset.export==="csv")downloadLedger("wnba-edge-ledger.csv",L.toCSV(myBets),"text/csv");
+    else downloadLedger("wnba-edge-ledger.json",JSON.stringify({schema:L.SCHEMA,exported_at:new Date().toISOString(),entries:myBets},null,2),"application/json");
+  });
+  const importInput=$("#ledgerImport");if(importInput)importInput.onchange=async()=>{
+    try{const parsed=JSON.parse(await importInput.files[0].text());const incoming=Array.isArray(parsed)?parsed:(parsed.entries||[]);const merged=L.merge(myBets,incoming);myBets=merged.entries;saveMyBets();window.alert(`${merged.added} wager(s) imported.`);renderView();}catch(_){window.alert("That file is not a valid WNBA Edge ledger export.");}
+  };
+  const clear=document.querySelector("[data-clear-ledger]");if(clear)clear.onclick=()=>{if(window.confirm("Clear every wager from this browser ledger? Export first if you need a backup.")){myBets=[];saveMyBets();renderView();}};
+}
+function renderView(){renderTabs();renderKpis();const views={plays:playsView,board:boardView,schedule:scheduleView,sim:simulatorView,ledger:ledgerView,accuracy:accuracyView,model:modelView,sources:sourcesView};$("#view").innerHTML=(views[state.tab]||playsView)();bindLedgerActions();}
 function setDate(value){if(!(index.dates||[]).includes(value))return;state.date=value;const url=new URL(location.href);url.searchParams.set("date",value);history.replaceState({},"",url);renderDateBar();renderView();}
 
 async function boot(){
   try{
     const payload=await Promise.all(FILES.map(name=>fetch(`${DATA}${name}.json`,{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error(name);return r.json()})));
-    [board,games,summary,meta,index,ledger,performance,simulator,news]=payload;
+    [board,games,summary,meta,index,performance,simulator,news]=payload;
+    myBets=L?L.load():[];if(L){const settled=L.settleAll(myBets,games);myBets=settled.entries;if(settled.changed)L.save(myBets);}
     const requested=new URL(location.href).searchParams.get("date"),today=easternToday(),dates=index.dates||[];
     state.date=dates.includes(requested)?requested:dates.includes(today)?today:index.built_for||dates[0]||today;
     $("#stamp").innerHTML=`LIVE DATA · <b>${esc(new Date(meta.generated_at).toLocaleString())}</b>`;setHealth();renderDateBar();renderView();

@@ -20,13 +20,14 @@
     "max_daily_exposure_pct": 0.35
   },
   "tiers": {
-    "best_bet": 0.08,
-    "good": 0.05,
-    "lean": 0.03,
+    "best_bet": 0.035,
+    "good": 0.025,
+    "lean": 0.012,
     "best_bet_min_confidence": 0.78,
     "best_bet_min_line_gap": 1.0,
     "best_bet_max_line_gap": 8.0,
-    "best_bet_min_price": -250
+    "best_bet_min_price": -175,
+    "best_bet_max_price": 160
   },
   "model": {
     "home_court_points": 2.5,
@@ -45,8 +46,9 @@
     "total_blend": 0.50,
     "max_spread_disagreement": 8.0,
     "max_total_disagreement": 12.0,
-    "edge_compression": 0.12,
-    "selection_haircut": 0.01,
+    "side_edge_ceiling": 0.055,
+    "total_edge_ceiling": 0.045,
+    "selection_haircut": 0.0,
     "rating_ridge": 12.0,
     "rating_mov_cap": 24.0,
     "min_games_for_full_confidence": 10
@@ -73,7 +75,7 @@
     "min_confidence": 0.70,
     "min_price": -350,
     "max_price": 550,
-    "max_bets_per_game": 1,
+    "max_bets_per_game": 2,
     "bet_started_games": false
   }
 }

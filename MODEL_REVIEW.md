@@ -20,10 +20,10 @@ enforced in code and tests.
 
 ## Preserved calculation rules
 
-- proportional two-way de-vigging;
+- power-method two-way de-vigging;
 - break-even probability from the price actually offered;
 - half-Kelly sizing with per-bet and daily caps;
-- 3% Lean, 5% Good and 8% Best Bet presentation thresholds;
+- 1.2% Lean, 2.5% Good and 3.5% Best Bet compressed model-edge thresholds;
 - 70% minimum confidence and home-court, rest, injury, form and split controls;
 - moneyline, spread and total evaluation at live normalized prices.
 
@@ -33,8 +33,12 @@ enforced in code and tests.
 - projections are partially anchored to the current market, with hard
   disagreement compression and a selection haircut;
 - a Best Bet is downgraded when confidence, price or line-gap checks fail;
-- qualified prices are locked once in an immutable ledger and graded from final
-  scores; later line movement cannot rewrite the entry;
+- qualification is measured against the complete no-vig two-way market, while
+  stake value is measured separately at the actual offered price;
+- a model recommendation never enters My Ledger automatically; only a wager the
+  user explicitly adds is locked and later graded from the final score;
+- a separate shadow book freezes all priced calls so model accuracy remains
+  measurable without pretending every recommendation was wagered;
 - an unpriced or already-started game cannot become a wager;
 - a failed refresh can reuse only a prior real-data cache and never creates a
   synthetic slate.

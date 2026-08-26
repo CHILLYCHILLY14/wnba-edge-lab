@@ -24,16 +24,37 @@ def american_to_prob(price: float) -> float:
     return 100.0 / (price + 100.0) if price > 0 else -price / (-price + 100.0)
 
 
+def price_ok(price) -> bool:
+    """True only for a usable American price from a real market."""
+    try:
+        value = float(price)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(value) and 100.0 <= abs(value) <= 5000.0
+
+
 def prob_to_american(prob: float) -> int:
     p = min(max(prob, 0.001), 0.999)
     value = -100.0 * p / (1.0 - p) if p >= 0.5 else 100.0 * (1.0 - p) / p
     return int(round(value))
 
 
-def devig(price_a: float, price_b: float) -> tuple[float, float]:
-    a, b = american_to_prob(price_a), american_to_prob(price_b)
-    total = a + b
-    return (a / total, b / total) if total > 0 else (0.5, 0.5)
+def devig(price_a: float, price_b: float) -> tuple[float | None, float | None]:
+    """Remove a two-way hold with the same power method used by MLB Edge."""
+    if not price_ok(price_a) or not price_ok(price_b):
+        return None, None
+    a, b = american_to_prob(float(price_a)), american_to_prob(float(price_b))
+    lo, hi = 0.5, 2.0
+    for _ in range(60):
+        exponent = (lo + hi) / 2.0
+        if a ** exponent + b ** exponent > 1.0:
+            lo = exponent
+        else:
+            hi = exponent
+    exponent = (lo + hi) / 2.0
+    fair_a, fair_b = a ** exponent, b ** exponent
+    total = fair_a + fair_b
+    return fair_a / total, fair_b / total
 
 
 def kelly_fraction(prob: float, price: float) -> float:
@@ -208,11 +229,13 @@ def project_game(game: dict, away: dict, home: dict, injuries: dict[str, dict], 
     }
 
 
-def _compress_edge(raw_edge: float, cfg: dict) -> float:
-    ceiling = float(cfg["model"]["edge_compression"])
+def _compress_edge(raw_edge: float, cfg: dict, market: str) -> float:
+    model_cfg = cfg["model"]
+    ceiling = float(model_cfg["total_edge_ceiling"] if market == "TOTAL"
+                    else model_cfg["side_edge_ceiling"])
     compressed = ceiling * math.tanh(raw_edge / ceiling)
     if compressed > 0:
-        compressed = max(0.0, compressed - float(cfg["model"]["selection_haircut"]))
+        compressed = max(0.0, compressed - float(model_cfg.get("selection_haircut", 0.0)))
     return compressed
 
 
@@ -230,6 +253,8 @@ def _tier(edge: float, confidence: float, line_gap: float | None, price: float, 
             reasons.append("model/market disagreement exceeds safety limit")
         if price < float(tiers["best_bet_min_price"]):
             reasons.append("price is too short for BEST BET")
+        if price > float(tiers["best_bet_max_price"]):
+            reasons.append("price is too long for BEST BET")
         return ("BEST BET", None) if not reasons else ("GOOD", "; ".join(reasons))
     if edge >= float(tiers["good"]):
         return "GOOD", None
@@ -239,17 +264,28 @@ def _tier(edge: float, confidence: float, line_gap: float | None, price: float, 
 def _candidate(game: dict, projection: dict, quote_key: str, label: str, market: str,
                side: str, model_prob: float, fair_prob: float | None, cfg: dict) -> dict | None:
     quote = (((game.get("odds") or {}).get("quotes") or {}).get(quote_key))
-    if not quote or quote.get("price") is None:
+    if not quote or not price_ok(quote.get("price")):
         return None
     price = float(quote["price"])
     breakeven = american_to_prob(price)
-    raw_edge = model_prob - breakeven
-    edge = _compress_edge(raw_edge, cfg)
+    # Match MLB Edge's separation of handicapping edge and price-shopping edge.
+    # Qualification is based on the model versus the complete, no-vig two-way
+    # market. The actual offered price is retained for EV and stake sizing.
+    raw_edge = (model_prob / fair_prob - 1.0) if fair_prob and fair_prob > 0 else 0.0
+    raw_realized_edge = model_prob * american_to_decimal(price) - 1.0
+    edge = _compress_edge(raw_edge, cfg, market)
+    realized_edge = _compress_edge(raw_realized_edge, cfg, market)
     line_gap = projection["line_gap"] if market in {"ML", "ATS"} else (
         (projection["total"] - projection["market_total"]) if projection["market_total"] is not None else None)
     tier, tier_note = _tier(edge, projection["confidence"], line_gap, price, cfg)
     reasons: list[str] = []
     filters = cfg["filters"]
+    if fair_prob is None:
+        tier = "AVOID"
+        reasons.append("Complete two-way market required")
+    if realized_edge <= 0:
+        tier = "AVOID"
+        reasons.append("Offered price has no positive expected value")
     if price < float(filters["min_price"]) or price > float(filters["max_price"]):
         tier = "AVOID"
         reasons.append("Price outside allowable range")
@@ -257,13 +293,17 @@ def _candidate(game: dict, projection: dict, quote_key: str, label: str, market:
         tier = "AVOID"
         reasons.append("Confidence below minimum")
     if edge < float(cfg["tiers"]["lean"]):
-        reasons.append("No positive price edge at the current line")
+        reasons.append("Does not clear the Lean model-edge threshold")
     if game["status"] != "pre":
         tier = "AVOID"
         reasons.append("Game has already started")
 
     bankroll = cfg["bankroll"]
-    raw_kelly = kelly_fraction(model_prob, price)
+    # Size from the smaller of model and realized compressed edge. This keeps a
+    # large raw probability disagreement from producing a large raw-Kelly bet.
+    stake_edge = max(0.0, min(edge, realized_edge))
+    effective_prob = min(0.999, max(0.001, (1.0 + stake_edge) / american_to_decimal(price)))
+    raw_kelly = kelly_fraction(effective_prob, price)
     requested = min(
         float(bankroll["max_stake"]),
         float(bankroll["starting"]) * float(bankroll["max_stake_pct"]),
@@ -295,6 +335,9 @@ def _candidate(game: dict, projection: dict, quote_key: str, label: str, market:
         "fair_price": fair_price,
         "edge_raw": round(raw_edge, 4),
         "edge": round(edge, 4),
+        "edge_real_raw": round(raw_realized_edge, 4),
+        "edge_real": round(realized_edge, 4),
+        "edge_price": round(realized_edge - edge, 4),
         "confidence": projection["confidence"],
         "tier": tier,
         "tier_note": tier_note,
@@ -345,22 +388,23 @@ def price_game(game: dict, projection: dict, cfg: dict) -> list[dict]:
 
 
 def allocate_portfolio(candidates: list[dict], cfg: dict) -> list[dict]:
-    """Allocate each day's highest-quality uncorrelated plays within its cap."""
+    """Allocate at most one side and one total per game within the daily cap."""
     bankroll = cfg["bankroll"]
     cap = float(bankroll["starting"]) * float(bankroll["max_daily_exposure_pct"])
     increment = float(bankroll["round_stake_to"])
     order = {"BEST BET": 0, "GOOD": 1, "LEAN": 2, "AVOID": 3}
     dates = sorted({row["date"] for row in candidates})
     for date in dates:
-        remaining, used_games = cap, set()
+        remaining, used_slots = cap, set()
         rows = [row for row in candidates if row["date"] == date]
         rows.sort(key=lambda row: (order[row["tier"]], -row["edge"], row["game_id"], row["market"]))
         for row in rows:
             if row["tier"] == "AVOID":
                 continue
-            if row["game_id"] in used_games:
+            slot = (row["game_id"], "TOTAL" if row["market"] == "TOTAL" else "SIDE")
+            if slot in used_slots:
                 row["tier"] = "AVOID"
-                row["reasons"].append("Higher-rated market already selected for this game")
+                row["reasons"].append("Higher-rated market already selected for this game and market group")
                 continue
             requested = float(row["stake_before_daily_cap"])
             granted = min(requested, remaining)
@@ -371,7 +415,7 @@ def allocate_portfolio(candidates: list[dict], cfg: dict) -> list[dict]:
                 continue
             row["stake"] = round(granted, 2)
             remaining = max(0.0, remaining - granted)
-            used_games.add(row["game_id"])
+            used_slots.add(slot)
             if remaining <= 1e-9 and requested - granted >= increment:
                 row["reasons"].append("Stake reduced to fit daily exposure cap")
     candidates.sort(key=lambda row: (row["date"], order[row["tier"]], -row["edge"], row["game_id"]))
