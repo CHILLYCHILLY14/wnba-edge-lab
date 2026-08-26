@@ -3,6 +3,17 @@ name: Refresh and deploy WNBA Edge Lab
 on:
   push:
     branches: [main]
+    # Source changes rebuild immediately. The refresh bot writes only state/
+    # and site/data/, so those commits cannot trigger this workflow again.
+    paths:
+      - ".github/workflows/deploy.yml"
+      - "config/**"
+      - "pipeline/**"
+      - "tests/**"
+      - "site/*.html"
+      - "site/*.js"
+      - "site/*.css"
+      - "requirements.txt"
   schedule:
     - cron: "17 12,16,20,23 * * *"
   workflow_dispatch:
