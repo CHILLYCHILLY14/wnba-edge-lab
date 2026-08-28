@@ -28,8 +28,10 @@ The GitHub Actions workflow refreshes several times daily and on every push to
 `main`. Each run:
 
 - refreshes the season schedule, final scores, current markets and injuries;
-- calculates opponent-adjusted team ratings and one projection per game;
-- selects no more than one side and one total per game within the daily exposure cap;
+- builds pace/efficiency, shooting, rebounding, venue, travel and schedule-load profiles;
+- weights reported absences by player role and ignores administrative non-injury listings;
+- walk-forward calibrates bias and score uncertainty without using future results;
+- selects no more than one position per game and three per slate;
 - freezes every priced model call in a separate accuracy shadow book;
 - republishes the static dashboard to GitHub Pages.
 
@@ -45,10 +47,13 @@ drives every relevant view.
 
 ## Risk rules
 
-- C$200 starting model bankroll and half-Kelly sizing;
-- C$5 minimum, C$60 per-bet maximum and 35% daily exposure cap;
-- 1.2% Lean, 2.5% Good and 3.5% Best Bet compressed model-edge thresholds;
-- 70% minimum confidence, with stricter Best Bet gates;
+- C$200 starting model bankroll and quarter-Kelly sizing;
+- C$5 minimum, C$60 hard maximum, 10% per-bet limit and 20% daily exposure cap;
+- 1.8% Lean, 3.2% Good and 4.5% Best Bet compressed model-edge thresholds;
+- 75% minimum confidence, with stricter Best Bet gates;
+- at least 2% positive value at the offered price after edge compression;
+- no more than three plays, two Best Bets and one position from any game;
+- no selection while a high-impact player has a materially unresolved status;
 - no-vig two-way market comparison for qualification, with actual offered-price
   break-even and realized value kept separate;
 - moneyline, spread and total pricing only when real two-sided quotes exist;

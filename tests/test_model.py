@@ -148,13 +148,16 @@ class TestPricingAndPortfolio(unittest.TestCase):
         self.assertLessEqual(sum(row["stake"] for row in selected), cap)
         slots={(row["game_id"],"TOTAL" if row["market"]=="TOTAL" else "SIDE") for row in selected}
         self.assertEqual(len(slots),len(selected))
-        self.assertLessEqual(sum(row["game_id"]=="0" for row in selected),2)
+        self.assertLessEqual(sum(row["game_id"]=="0" for row in selected),1)
+        self.assertLessEqual(len(selected), CFG["filters"]["max_bets_per_day"])
 
 
 class TestLedger(unittest.TestCase):
     def selected_row(self):
         g = game()
-        rows = model.price_game(g, projection(g), CFG)
+        p = projection(g)
+        p.update({"margin": 9.0, "line_gap": 5.0, "total": 168.0, "confidence": .86})
+        rows = model.price_game(g, p, CFG)
         model.allocate_portfolio(rows, CFG)
         return next(row for row in rows if row["stake"] > 0)
 
@@ -184,6 +187,27 @@ class TestFeedParser(unittest.TestCase):
         payload = [{"provider": {"name": "Feed", "priority": 1}, "spread": 4.5, "details": "NY -4.5"}]
         parsed = espn.parse_odds(payload, "SEA", "NY")
         self.assertIsNone(parsed)
+
+    def test_administrative_absence_is_not_an_injury_penalty(self):
+        summary = {"injuries": [{"team": {"abbreviation": "NY"}, "injuries": [{
+            "status": "Out", "athlete": {"id": "9", "displayName": "Reserve", "position": {"abbreviation": "G"}},
+            "details": {"type": "Coach's Decision"},
+        }]}]}
+        parsed = espn.parse_injuries(summary, CFG)["NY"]
+        self.assertEqual(parsed["points"], 0.0)
+        self.assertFalse(parsed["players"][0]["counted"])
+
+    def test_team_leader_absence_gets_role_weighted_impact(self):
+        summary = {
+            "leaders": [{"leaders": [{"name": "pointsPerGame", "leaders": [{"value": 20, "athlete": {"id": "1"}}]}]}],
+            "injuries": [{"team": {"abbreviation": "NY"}, "injuries": [{
+                "status": "Out", "athlete": {"id": "1", "displayName": "Star", "position": {"abbreviation": "G"}},
+                "details": {"type": "Knee"},
+            }]}],
+        }
+        parsed = espn.parse_injuries(summary, CFG)["NY"]
+        self.assertGreater(parsed["points"], CFG["injuries"]["default_rotation_points"])
+        self.assertEqual(parsed["players"][0]["impact_basis"], "team leader")
 
 
 if __name__ == "__main__":

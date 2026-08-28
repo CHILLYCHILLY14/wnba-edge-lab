@@ -1,15 +1,15 @@
 const DATA="data/";
-const FILES=["board","games","summary","meta","index","performance","simulator","news"];
+const FILES=["board","games","summary","meta","index","performance","simulator","news","calibration"];
 const L=window.WNBALedger;
 const state={tab:"plays",tier:"PLAYS",date:null};
-let board=[],games=[],summary={},meta={},index={},performance={},simulator={teams:{}},news=[],myBets=[];
+let board=[],games=[],summary={},meta={},index={},performance={},simulator={teams:{}},news=[],calibration={},myBets=[];
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const pct=(v,d=1)=>v==null?"—":`${(Number(v)*100).toFixed(d)}%`;
 const money=v=>v==null?"—":`C$${Number(v).toFixed(2)}`;
 const price=v=>v==null?"—":Number(v)>0?`+${v}`:`${v}`;
 const num=(v,d=1)=>v==null?"—":Number(v).toFixed(d);
-const tierClass=t=>String(t||"AVOID").toLowerCase().replaceAll(" ","-");
+const tierClass=t=>({"BEST BET":"best","GOOD":"good","LEAN":"lean","AVOID":"pass"}[String(t||"AVOID")]||"pass");
 const dateLabel=value=>{try{return new Intl.DateTimeFormat("en-CA",{timeZone:"America/Toronto",weekday:"short",month:"short",day:"numeric"}).format(new Date(value+"T12:00:00Z"));}catch{return value;}};
 function easternToday(){try{return new Intl.DateTimeFormat("en-CA",{timeZone:"America/Toronto",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());}catch{return new Date().toISOString().slice(0,10);}}
 
@@ -42,18 +42,18 @@ function renderKpis(){
     ["Qualified",d.plays??0,"selected slate","accent"],
     ["Suggested risk",money(d.staked??0),`${money(summary.daily_cap)} model cap`,(d.staked||0)>summary.daily_cap?"neg":""],
     ["Games",d.games??0,`${d.priced??0} with prices`,d.priced?"":"warn"],
-    ["Markets",d.markets??0,"moneyline · spread · total",""],
+    ["Walk-forward MAE",num(calibration.spread_mae),`${num(calibration.total_mae)} total · ${calibration.n||0} games`,""],
     ["My P/L",money(mine.profit),mine.settled?`${mine.settled} settled · ${mine.pending} pending`:`${mine.pending} pending`,mine.profit>0?"pos":mine.profit<0?"neg":""],
   ];
   $("#kpis").innerHTML=items.map(([k,v,n,c])=>`<div class="kpi"><div class="k">${esc(k)}</div><div class="v ${c||""}">${esc(v)}</div><div class="n">${esc(n)}</div></div>`).join("");
 }
 
 function renderDateBar(){
-  const dates=index.dates||[];const select=$("#dateSelect");
-  select.innerHTML=dates.map(d=>`<option value="${d}" ${d===state.date?"selected":""}>${esc(dateLabel(d))}</option>`).join("");
+  const dates=index.dates||[];
   const i=dates.indexOf(state.date);$("#prevDate").disabled=i<=0;$("#nextDate").disabled=i<0||i>=dates.length-1;
-  const d=(index.day_summary||{})[state.date]||{};
-  $("#dateNote").innerHTML=`<b>${esc(state.date||"No date")}</b> · ${d.games||0} game(s) · ${d.priced||0} priced`;
+  $("#curDate").textContent=state.date?dateLabel(state.date):"No slate";
+  $("#week").innerHTML=dates.map(value=>{const d=(index.day_summary||{})[value]||{};const parts=dateLabel(value).split(", ");return `<button type="button" class="${value===state.date?"on":""}" data-date="${value}"><b>${esc(parts[0]||dateLabel(value))}</b>${esc(parts.slice(1).join(", ")||value)}<i>${d.games||0} games · ${d.priced||0} priced</i></button>`}).join("");
+  document.querySelectorAll("[data-date]").forEach(button=>button.onclick=()=>setDate(button.dataset.date));
 }
 
 function renderTabs(){
@@ -75,7 +75,7 @@ function factors(projection){
 }
 function injuries(projection){
   const groups=[[projection.away_profile?.team,projection.away_injuries],[projection.home_profile?.team,projection.home_injuries]];
-  const rows=groups.flatMap(([team,block])=>(block?.players||[]).map(p=>`<div class="injury"><b>${esc(team)}</b> · ${esc(p.name)} · ${esc(p.status)} · ${esc(p.detail||p.position)} <span class="num">${p.points?`(${p.points.toFixed(2)} pts)`:""}</span></div>`));
+  const rows=groups.flatMap(([team,block])=>(block?.players||[]).map(p=>`<div class="injury"><b>${esc(team)}</b> · ${esc(p.name)} · ${esc(p.status)} · ${esc(p.detail||p.position)} <span class="num">${p.counted===false?"(not counted as injury)":p.points?`(${p.points.toFixed(2)} pts · ${esc(p.impact_basis||"role weighted")})`:""}</span></div>`));
   return rows.length?rows.join(""):`<div class="injury">No listed injury adjustment from the current ESPN game report.</div>`;
 }
 function ledgerControl(row,compact=false){
@@ -86,13 +86,15 @@ function ledgerControl(row,compact=false){
 }
 function card(row){
   const p=row.projection||{};const game=games.find(g=>g.game_id===row.game_id);const notes=(row.reasons||[]).join(" · ")||row.tier_note||"Qualified at the current live price and inside the daily exposure cap.";
-  return `<article class="card ${tierClass(row.tier)}"><div class="cardhead"><div><div class="match">${esc(row.matchup)}</div><div class="meta">${esc(row.start_local)} · ${esc(row.book)} · LIVE PRICE</div></div>${tier(row)}</div><div class="cardbody">
-    <div class="pick">${esc(row.pick)} <small>${price(row.price)}</small></div>
-    <div class="score"><span>${esc(row.away)} ${num(p.away_score)} – ${esc(row.home)} ${num(p.home_score)}</span><small>MODEL LINE ${p.margin>=0?row.home:row.away} ${Math.abs(Number(p.margin||0)).toFixed(1)} · TOTAL ${num(p.total)}</small></div>
-    <div class="grid5"><div class="metric"><div class="k">Model</div><div class="v">${pct(row.model_prob)}</div></div><div class="metric"><div class="k">No-vig market</div><div class="v">${pct(row.market_fair_prob)}</div></div><div class="metric"><div class="k">Break-even</div><div class="v">${pct(row.breakeven)}</div></div><div class="metric"><div class="k">Edge</div><div class="v">${pct(row.edge)}</div></div><div class="metric"><div class="k">Stake</div><div class="v">${money(row.stake)}</div></div></div>
-    <div class="why"><b>${row.tier==="AVOID"?"Why avoid":"Why it rates"}:</b> ${esc(notes)}${game?.rationale?`<br>${esc(game.rationale)}`:""}</div>
+  const modelWidth=Math.max(2,Math.min(98,Number(row.model_prob||.5)*100));
+  return `<article class="card ${tierClass(row.tier)}"><div class="hd"><div><div class="match">${esc(row.matchup)}</div><div class="meta"><span class="chip">${esc(row.start_local)}</span><span class="chip ok">${esc(row.book)} · LIVE</span><span class="chip">${pct(row.confidence)} confidence</span></div></div>${tier(row)}</div><div class="body">
+    <div class="glance"><div><div class="pick">${esc(row.pick)} <small>${price(row.price)}</small></div><div class="score">${esc(row.away)} ${num(p.away_score)} – ${esc(row.home)} ${num(p.home_score)}<small> · line ${p.margin>=0?row.home:row.away} ${Math.abs(Number(p.margin||0)).toFixed(1)} · total ${num(p.total)}</small></div></div>
+      <div class="glance-mid"><div class="lab"><span>Model ${pct(row.model_prob)}</span><span>No-vig market ${pct(row.market_fair_prob)}</span></div><div class="bar"><i class="a" style="width:${modelWidth}%"></i><i class="h" style="width:${100-modelWidth}%"></i></div></div>
+      <div class="glance-metrics"><div class="metric"><div class="k">Break-even</div><div class="v">${pct(row.breakeven)}</div></div><div class="metric"><div class="k">Probability gap</div><div class="v">${pct(row.edge_probability_points)}</div></div><div class="metric"><div class="k">Model edge</div><div class="v">${pct(row.edge)}</div></div><div class="metric"><div class="k">At-price EV</div><div class="v">${pct(row.edge_real)}</div></div><div class="metric"><div class="k">Stake</div><div class="v">${money(row.stake)}</div></div></div>
+    </div>
+    <div class="verdict"><span class="act ${row.tier==="BEST BET"?"act-BET":row.tier==="GOOD"?"act-LEAN":row.tier==="LEAN"?"act-WATCH":"act-PASS"}">${esc(row.tier)}</span><span><b>${row.tier==="AVOID"?"Why pass":"Why it rates"}:</b> ${esc(notes)}${game?.rationale?` ${esc(game.rationale)}`:""}</span></div>
     ${ledgerControl(row)}
-    <details><summary>Projection arithmetic</summary>${factors(p)}</details><details><summary>Live injury report</summary>${injuries(p)}</details>
+    <details class="gd"><summary class="gsum">Projection arithmetic</summary>${factors(p)}</details><details class="gd"><summary class="gsum">Live player availability</summary>${injuries(p)}</details>
   </div></article>`;
 }
 
@@ -109,7 +111,7 @@ function boardView(){
   const choices=["PLAYS","ALL","BEST BET","GOOD","LEAN","AVOID"];
   let rows=selectedRows();if(state.tier==="PLAYS")rows=rows.filter(r=>r.tier!=="AVOID");else if(state.tier!=="ALL")rows=rows.filter(r=>r.tier===state.tier);
   const filters=`<div class="filters">${choices.map(t=>`<button class="filter ${state.tier===t?"on":""}" data-tier="${t}">${t==="PLAYS"?"Plays only":t}</button>`).join("")}</div>`;
-  const table=rows.length?`<div class="tablewrap"><table><thead><tr><th>Tier</th><th>Game</th><th>Pick</th><th>Book</th><th class="num">Price</th><th class="num">Model</th><th class="num">No-vig market</th><th class="num">Break-even</th><th class="num">Raw model edge</th><th class="num">Edge</th><th class="num">Confidence</th><th class="num">Stake</th><th>Ledger</th><th>Reason</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${tier(r)}</td><td class="mono">${esc(r.matchup)}</td><td class="mono">${esc(r.pick)}</td><td>${esc(r.book)}</td><td class="num">${price(r.price)}</td><td class="num">${pct(r.model_prob)}</td><td class="num">${pct(r.market_fair_prob)}</td><td class="num">${pct(r.breakeven)}</td><td class="num">${pct(r.edge_raw)}</td><td class="num">${pct(r.edge)}</td><td class="num">${pct(r.confidence)}</td><td class="num">${money(r.stake)}</td><td>${ledgerControl(r,true)}</td><td>${esc((r.reasons||[]).join(" · ")||r.tier_note||"—")}</td></tr>`).join("")}</tbody></table></div>`:`<div class="empty"><b>No priced markets in this filter</b>Unpriced games remain on the Schedule tab and never become bets.</div>`;
+  const table=rows.length?`<div class="tablewrap"><table class="rt"><thead><tr><th>Tier</th><th>Game</th><th>Pick</th><th>Book</th><th class="num">Price</th><th class="num">Model</th><th class="num">Market</th><th class="num">Break-even</th><th class="num">Prob. gap</th><th class="num">Edge</th><th class="num">Confidence</th><th class="num">Stake</th><th>Ledger</th><th>Reason</th></tr></thead><tbody>${rows.map(r=>`<tr><td data-label="Tier">${tier(r)}</td><td data-primary class="mono">${esc(r.matchup)} · ${esc(r.pick)}</td><td data-label="Pick" class="mono">${esc(r.pick)}</td><td data-label="Book">${esc(r.book)}</td><td data-label="Price" class="num">${price(r.price)}</td><td data-label="Model" class="num">${pct(r.model_prob)}</td><td data-label="Market" class="num">${pct(r.market_fair_prob)}</td><td data-label="Break-even" class="num">${pct(r.breakeven)}</td><td data-label="Prob. gap" class="num">${pct(r.edge_probability_points)}</td><td data-label="Edge" class="num">${pct(r.edge)}</td><td data-label="Confidence" class="num">${pct(r.confidence)}</td><td data-label="Stake" class="num">${money(r.stake)}</td><td data-trail>${ledgerControl(r,true)}</td><td data-trail>${esc((r.reasons||[]).join(" · ")||r.tier_note||"—")}</td></tr>`).join("")}</tbody></table></div>`:`<div class="empty"><b>No priced markets in this filter</b>Unpriced games remain on the Schedule tab and never become bets.</div>`;
   setTimeout(()=>document.querySelectorAll("[data-tier]").forEach(b=>b.onclick=()=>{state.tier=b.dataset.tier;renderView();}),0);
   return panelHead("Every priced side","AVOID rows remain visible so a quiet board is explainable instead of looking broken.")+filters+table;
 }
@@ -133,12 +135,14 @@ function gaussian(random){let u=0,v=0;while(!u)u=random();while(!v)v=random();re
 function runSim(){
   const teams=simulator.teams||{},a=teams[$("#simAway").value],h=teams[$("#simHome").value];if(!a||!h)return;
   const hca=Number($("#simHca").value||0),aAdj=Number($("#simAwayAdj").value||0),hAdj=Number($("#simHomeAdj").value||0);
-  const awayBase=(Number(a.ppg)+Number(h.papg))/2+aAdj,homeBase=(Number(h.ppg)+Number(a.papg))/2+hAdj;
-  const power=(Number(h.power_rating)-Number(a.power_rating))*.35;const margin=homeBase-awayBase+hca+power;const total=awayBase+homeBase;
+  const awayBase=(Number(a.raw_ppg||a.ppg)+Number(h.raw_papg||h.papg))/2+aAdj,homeBase=(Number(h.raw_ppg||h.ppg)+Number(a.raw_papg||a.papg))/2+hAdj;
+  const power=(Number(h.power_rating)-Number(a.power_rating))*Number(simulator.power_weight||.35);const margin=homeBase-awayBase+hca+power+Number(simulator.margin_bias||0);
+  const recent=(Number(a.classic_l10_ppg||a.l10_ppg)+Number(h.classic_l10_ppg||h.l10_ppg)+Number(a.classic_l10_papg||a.l10_papg)+Number(h.classic_l10_papg||h.l10_papg))/2;
+  const total=.65*(awayBase+homeBase)+.35*recent+Number(simulator.total_bias||0);
   const line=Number($("#simHomeLine").value),totalLine=Number($("#simTotalLine").value);const hasLine=$("#simHomeLine").value!=="",hasTotal=$("#simTotalLine").value!=="";
   const random=rng([...$("#simAway").value+$("#simHome").value].reduce((s,c)=>s+c.charCodeAt(0),2026));let hw=0,hc=0,ov=0,as=0,hs=0;
   for(let i=0;i<10000;i++){const m=margin+gaussian(random)*Number(simulator.spread_sigma||11),t=total+gaussian(random)*Number(simulator.total_sigma||11);const home=(t+m)/2,away=(t-m)/2;as+=away;hs+=home;if(m>0)hw++;if(hasLine&&m+line>0)hc++;if(hasTotal&&t>totalLine)ov++;}
-  $("#simResult").innerHTML=`<div class="simscore">${esc(a.team)} ${(as/10000).toFixed(1)} – ${esc(h.team)} ${(hs/10000).toFixed(1)}</div><div class="simprobs"><div class="simprob"><div class="k">${esc(h.team)} win</div><div class="v">${(hw/100).toFixed(1)}%</div><div class="meter"><i style="width:${hw/100}%"></i></div></div><div class="simprob"><div class="k">Home cover ${hasLine?line>0?`+${line}`:line:"—"}</div><div class="v">${hasLine?(hc/100).toFixed(1)+"%":"—"}</div><div class="meter"><i style="width:${hasLine?hc/100:0}%"></i></div></div><div class="simprob"><div class="k">Over ${hasTotal?totalLine:"—"}</div><div class="v">${hasTotal?(ov/100).toFixed(1)+"%":"—"}</div><div class="meter"><i style="width:${hasTotal?ov/100:0}%"></i></div></div></div><div class="note"><b>10,000 simulations.</b> Uses the same live season scoring, opponent defence, schedule-adjusted power rating, home court and WNBA variance as the board. Manual adjustment boxes are optional scenario controls, not required data entry.</div>`;
+  $("#simResult").innerHTML=`<div class="simscore">${esc(a.team)} ${(as/10000).toFixed(1)} – ${esc(h.team)} ${(hs/10000).toFixed(1)}</div><div class="simprobs"><div class="simprob"><div class="k">${esc(h.team)} win</div><div class="v">${(hw/100).toFixed(1)}%</div><div class="meter"><i style="width:${hw/100}%"></i></div></div><div class="simprob"><div class="k">Home cover ${hasLine?line>0?`+${line}`:line:"—"}</div><div class="v">${hasLine?(hc/100).toFixed(1)+"%":"—"}</div><div class="meter"><i style="width:${hasLine?hc/100:0}%"></i></div></div><div class="simprob"><div class="k">Over ${hasTotal?totalLine:"—"}</div><div class="v">${hasTotal?(ov/100).toFixed(1)+"%":"—"}</div><div class="meter"><i style="width:${hasTotal?ov/100:0}%"></i></div></div></div><div class="note"><b>10,000 simulations.</b> Uses the board's opponent-adjusted scoring, schedule-adjusted power, home court and walk-forward calibrated uncertainty (spread σ ${num(simulator.spread_sigma)}, total σ ${num(simulator.total_sigma)}). Manual adjustments are optional what-if controls.</div>`;
 }
 function simulatorView(){
   const teams=Object.keys(simulator.teams||{}).sort();if(teams.length<2)return panelHead("Game simulator","Runs the current automatic model with any matchup.")+`<div class="empty"><b>Ratings are not available yet</b>The simulator activates after the first live season refresh.</div>`;
@@ -157,23 +161,25 @@ function ledgerView(){
 
 function accuracyView(){
   const tierRows=performance.by_tier||{},mine=mySummary();const stats=[
-    ["Model calls graded",Object.values(tierRows).reduce((n,row)=>n+Number(row.settled||0),0),"includes AVOID shadow calls"],["My wagers settled",mine.settled,`${mine.pending} pending`],["My net P/L",money(mine.profit),mine.roi!=null?`${pct(mine.roi)} ROI`:"needs results"],["My risked",money(mine.risked||0),"settled confirmed stakes"],
+    ["Spread MAE",num(calibration.spread_mae),`${calibration.n||0} walk-forward games`],["Total MAE",num(calibration.total_mae),`σ ${num(calibration.total_sigma)}`],["Model calls graded",Object.values(tierRows).reduce((n,row)=>n+Number(row.settled||0),0),"includes AVOID shadow calls"],["My wagers settled",mine.settled,`${mine.pending} pending`],["My net P/L",money(mine.profit),mine.roi!=null?`${pct(mine.roi)} ROI`:"needs results"],["My risked",money(mine.risked||0),"settled confirmed stakes"],
   ];
   const group=(title,rows)=>`<section class="box"><h3 style="margin-top:0">${esc(title)}</h3><div class="tablewrap"><table style="min-width:520px"><thead><tr><th>Group</th><th>Record</th><th class="num">Win rate</th><th class="num">P/L</th><th class="num">ROI</th></tr></thead><tbody>${Object.entries(rows).map(([k,r])=>`<tr><td>${esc(k==="AVOID"?"AVOID / shadow":k)}</td><td class="mono">${esc(r.record)}</td><td class="num">${pct(r.win_pct)}</td><td class="num">${money(r.profit)}</td><td class="num">${pct(r.roi)}</td></tr>`).join("")||`<tr><td colspan="5">Needs graded calls</td></tr>`}</tbody></table></div></section>`;
   return panelHead("Accuracy & ROI","Every priced model call—including AVOID—is frozen in a separate shadow book so the tier labels can be tested without pretending every recommendation was wagered.")+`<div class="stats">${stats.map(([k,v,n])=>`<article class="stat"><h3>${esc(k)}</h3><div class="big">${esc(v)}</div><p>${esc(n)}</p></article>`).join("")}</div><div style="margin-top:14px">${group("Model tier performance",tierRows)}</div>`;
 }
 
 function modelView(){
-  const teams=Object.values(simulator.teams||{}).sort((a,b)=>Number(b.power_rating)-Number(a.power_rating));const table=teams.length?`<div class="tablewrap"><table><thead><tr><th>Rank</th><th>Team</th><th class="num">Power</th><th class="num">Games</th><th class="num">PPG</th><th class="num">Allowed</th><th class="num">Last 10 PPG</th><th class="num">Last 10 allowed</th><th class="num">Win %</th><th class="num">Home %</th><th class="num">Road %</th></tr></thead><tbody>${teams.map((t,i)=>`<tr><td class="num">${i+1}</td><td class="mono">${esc(t.team)}</td><td class="num">${Number(t.power_rating)>=0?"+":""}${num(t.power_rating,2)}</td><td class="num">${t.games}</td><td class="num">${num(t.ppg)}</td><td class="num">${num(t.papg)}</td><td class="num">${num(t.l10_ppg)}</td><td class="num">${num(t.l10_papg)}</td><td class="num">${pct(t.win_pct)}</td><td class="num">${pct(t.home_pct)}</td><td class="num">${pct(t.road_pct)}</td></tr>`).join("")}</tbody></table></div>`:`<div class="empty"><b>No live ratings yet</b>Ratings appear automatically after completed WNBA games are available.</div>`;
-  return panelHead("Model & power ratings","Ratings solve schedule-adjusted margins from completed games. Projections then add opponent defence, recent form, venue splits, rest and current injuries before being anchored to the market.")+table+`<div class="note"><b>Edge safety:</b> Qualification compares the model with the complete no-vig two-way market. Actual break-even and realized price value remain separate, extreme edges are compressed, and BEST BET also requires confidence, a meaningful—but not extreme—line gap and an acceptable price. The model never upgrades a play merely to fill the page.</div>`;
+  const teams=Object.values(simulator.teams||{}).sort((a,b)=>Number(b.power_rating)-Number(a.power_rating));const table=teams.length?`<div class="tablewrap"><table><thead><tr><th>Rank</th><th>Team</th><th class="num">Power</th><th class="num">Games</th><th class="num">PPG</th><th class="num">Allowed</th><th class="num">Off eff.</th><th class="num">Def eff.</th><th class="num">Pace</th><th class="num">eFG%</th><th class="num">Reb share</th></tr></thead><tbody>${teams.map((t,i)=>`<tr><td class="num">${i+1}</td><td class="mono">${esc(t.team)}</td><td class="num">${Number(t.power_rating)>=0?"+":""}${num(t.power_rating,2)}</td><td class="num">${t.games}</td><td class="num">${num(t.ppg)}</td><td class="num">${num(t.papg)}</td><td class="num">${num(t.off_eff)}</td><td class="num">${num(t.def_eff)}</td><td class="num">${num(t.pace)}</td><td class="num">${pct(t.efg)}</td><td class="num">${pct(t.rebound_share)}</td></tr>`).join("")}</tbody></table></div>`:`<div class="empty"><b>No live ratings yet</b>Ratings appear automatically after completed WNBA games are available.</div>`;
+  return panelHead("Model & power ratings","The scoring baseline is tested walk-forward, then checked against pace, efficiency, shot profile, rebounding, free-throw pressure, schedule density, travel and current player availability before the market anchor is applied.")+table+`<div class="note"><b>Calibration:</b> ${calibration.n||0} prior games · spread MAE ${num(calibration.spread_mae)} · total MAE ${num(calibration.total_mae)} · total uncertainty ${num(calibration.total_sigma)} points. Future results are excluded from every replay. <b>Edge safety:</b> one play maximum per game, three per slate, quarter-Kelly sizing, a 2% at-price execution buffer and a hold when a high-impact player is unresolved.</div>`;
 }
 
 function sourcesView(){
   const sources=[
-    ["Schedule, scores and team statistics","ESPN public WNBA scoreboard · keyless · full 2026 season refreshed automatically"],
+    ["Schedule, scores and box-score inputs","ESPN public WNBA scoreboard · keyless · full 2026 season refreshed automatically"],
     ["Moneyline, spread and total","DraftKings prices distributed through ESPN's public game feed; only actual posted quotes are priced"],
-    ["Injuries and availability","ESPN game summary injury reports for every upcoming game in the active window"],
-    ["Power ratings and projections","Calculated locally from completed results; no external prediction or sample data"],
+    ["Player availability","ESPN injury reports, weighted by current team-leader role; coach's-decision and non-injury listings are not treated like injuries"],
+    ["Efficiency and schedule context","Pace, offensive/defensive efficiency, eFG%, free-throw pressure, rebounding, travel, back-to-backs and compressed schedules"],
+    ["Independent matchup prior","ESPN matchup predictor receives a small capped weight when available; it cannot override the local model or market"],
+    ["Calibration","Walk-forward errors from completed 2026 games set bias and uncertainty; no future result is allowed into an earlier replay"],
     ["My Ledger","Only wagers you click are stored in this browser; confirmed entries settle from ESPN final scores"],
     ["Model accuracy","A separate shadow book grades every priced call, including AVOID, without adding it to My Ledger"],
   ];
@@ -209,13 +215,13 @@ function setDate(value){if(!(index.dates||[]).includes(value))return;state.date=
 async function boot(){
   try{
     const payload=await Promise.all(FILES.map(name=>fetch(`${DATA}${name}.json`,{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error(name);return r.json()})));
-    [board,games,summary,meta,index,performance,simulator,news]=payload;
+    [board,games,summary,meta,index,performance,simulator,news,calibration]=payload;
     myBets=L?L.load():[];if(L){const settled=L.settleAll(myBets,games);myBets=settled.entries;if(settled.changed)L.save(myBets);}
     const requested=new URL(location.href).searchParams.get("date"),today=easternToday(),dates=index.dates||[];
     state.date=dates.includes(requested)?requested:dates.includes(today)?today:index.built_for||dates[0]||today;
     $("#stamp").innerHTML=`LIVE DATA · <b>${esc(new Date(meta.generated_at).toLocaleString())}</b>`;setHealth();renderDateBar();renderView();
-    $("#dateSelect").onchange=e=>setDate(e.target.value);$("#prevDate").onclick=()=>{const i=dates.indexOf(state.date);if(i>0)setDate(dates[i-1])};$("#nextDate").onclick=()=>{const i=dates.indexOf(state.date);if(i>=0&&i<dates.length-1)setDate(dates[i+1])};$("#today").onclick=()=>{const t=easternToday();if(dates.includes(t))setDate(t);else{const future=dates.find(d=>d>=t);setDate(future||dates.at(-1))}};
-    $("#theme").onclick=()=>{const root=document.documentElement;root.dataset.theme=root.dataset.theme==="light"?"dark":"light";localStorage.setItem("wnba-theme",root.dataset.theme)};const theme=localStorage.getItem("wnba-theme");if(theme)document.documentElement.dataset.theme=theme;
+    $("#prevDate").onclick=()=>{const i=dates.indexOf(state.date);if(i>0)setDate(dates[i-1])};$("#nextDate").onclick=()=>{const i=dates.indexOf(state.date);if(i>=0&&i<dates.length-1)setDate(dates[i+1])};$("#today").onclick=()=>{const t=easternToday();if(dates.includes(t))setDate(t);else{const future=dates.find(d=>d>=t);setDate(future||dates.at(-1))}};
+    $("#theme").onclick=()=>{const root=document.documentElement;const current=root.dataset.theme||(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark");root.dataset.theme=current==="light"?"dark":"light";localStorage.setItem("wnba-theme",root.dataset.theme)};const theme=localStorage.getItem("wnba-theme");if(theme)document.documentElement.dataset.theme=theme;
   }catch(error){$("#health").hidden=false;$("#health").className="health error";$("#health").textContent="The automatic data files could not be loaded.";$("#view").innerHTML=`<div class="empty"><b>No live model data available</b>No sample data will be substituted. The next scheduled refresh will try again.</div>`;}
 }
 boot();

@@ -138,6 +138,7 @@ def build(target_date: str | None = None, days: int | None = None, offline: bool
 
     history = [game for game in all_games if game.get("completed") and game.get("season_type") == 2]
     ratings = model.solve_ratings(history, cfg)
+    calibration = model.rolling_calibration(history, cfg)
     lines = _capture_lines(window_games, read_json(STATE / "lines.json", {"games": {}}))
     write_json(STATE / "lines.json", lines)
 
@@ -146,10 +147,13 @@ def build(target_date: str | None = None, days: int | None = None, offline: bool
         if game.get("season_type") not in {2, 3}:
             continue
         prior = [row for row in history if row["tipoff"] < game["tipoff"]]
-        away_profile = model.team_profile(game["away"]["abbr"], prior, game["tipoff"], ratings)
-        home_profile = model.team_profile(game["home"]["abbr"], prior, game["tipoff"], ratings)
-        injuries = (contexts.get(game["game_id"]) or {}).get("injuries") or {}
-        projection = model.project_game(game, away_profile, home_profile, injuries, cfg)
+        game["days_out"] = (_date(game["date"]) - selected).days
+        venue_team = game["home"]["abbr"]
+        away_profile = model.team_profile(game["away"]["abbr"], prior, game["tipoff"], ratings, venue_team)
+        home_profile = model.team_profile(game["home"]["abbr"], prior, game["tipoff"], ratings, venue_team)
+        context = contexts.get(game["game_id"]) or {}
+        injuries = context.get("injuries") or {}
+        projection = model.project_game(game, away_profile, home_profile, injuries, cfg, context, calibration)
         candidates = model.price_game(game, projection, cfg) if game.get("odds") else []
         board.extend(candidates)
         published_games.append({
@@ -207,7 +211,7 @@ def build(target_date: str | None = None, days: int | None = None, offline: bool
         "season": season,
         "generated_at": generated,
         "built_for": selected.strftime("%Y-%m-%d"),
-        "source": "ESPN public schedule, team statistics, injuries and DraftKings prices",
+        "source": "ESPN schedule, box-score/team efficiency, predictor, injuries and DraftKings prices",
         "source_status": source_status,
         "live_data": bool(all_games),
         "key_required": False,
@@ -218,6 +222,7 @@ def build(target_date: str | None = None, days: int | None = None, offline: bool
             "priced_games": priced_games,
             "provider": "ESPN public feed / DraftKings",
         },
+        "calibration": calibration,
     }
     summary = {
         "bankroll": perf["current_bankroll"],
@@ -235,9 +240,12 @@ def build(target_date: str | None = None, days: int | None = None, offline: bool
     simulator = {
         "generated_at": generated,
         "home_court": cfg["model"]["home_court_points"],
-        "spread_sigma": cfg["model"]["spread_sigma"],
-        "total_sigma": cfg["model"]["total_sigma"],
-        "teams": {team: model.team_profile(team, history, generated, ratings) for team in sorted(ratings)},
+        "power_weight": cfg["model"]["classic_power_weight"],
+        "margin_bias": calibration["margin_bias"],
+        "total_bias": calibration["total_bias"],
+        "spread_sigma": calibration["spread_sigma"],
+        "total_sigma": calibration["total_sigma"],
+        "teams": {team: model.team_profile(team, history, generated, ratings, team) for team in sorted(ratings)},
     }
     index = {
         "generated_at": generated,
@@ -259,6 +267,7 @@ def build(target_date: str | None = None, days: int | None = None, offline: bool
         "performance.json": perf,
         "simulator.json": simulator,
         "news.json": espn.fetch_news(20) if not offline and source_status == "live" else [],
+        "calibration.json": calibration,
     }
     for name, payload in outputs.items():
         write_json(SITE / name, payload)
