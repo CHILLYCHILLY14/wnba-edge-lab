@@ -71,8 +71,8 @@ def _lock(row: dict, tracked_at: str, shadow: bool = False) -> dict:
 
 
 def sync(candidates: list[dict], games: list[dict], ledger_state: dict | None,
-         shadow_state: dict | None) -> tuple[dict, dict]:
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+         shadow_state: dict | None, now: str | None = None) -> tuple[dict, dict]:
+    now = now or datetime.now(timezone.utc).isoformat(timespec="seconds")
     game_map = {game["game_id"]: game for game in games}
     # Previous releases wrote qualifying model picks here automatically. Clear
     # that generated list during the first refresh after this migration. The
@@ -84,6 +84,10 @@ def sync(candidates: list[dict], games: list[dict], ledger_state: dict | None,
     # The shadow book records every priced side so tier quality can be tested.
     shadow_existing = {row["id"] for row in shadow["calls"]}
     for row in candidates:
+        from .model_accuracy import instant
+        start = instant(row.get("tipoff"))
+        if not start or start <= instant(now) or (game_map.get(row["game_id"]) or {}).get("completed"):
+            continue
         if row["candidate_id"] not in shadow_existing:
             shadow["calls"].append(_lock(row, now, shadow=True))
             shadow_existing.add(row["candidate_id"])
@@ -142,5 +146,5 @@ def performance(ledger: dict, shadow: dict, starting_bankroll: float) -> dict:
         "risked": risked,
         "roi": round(profit / risked, 4) if risked else None,
         "by_tier": groups(calls, "tier"),
-        "by_market": groups(bets, "market"),
+        "by_market": groups(calls, "market"),
     }

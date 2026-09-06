@@ -174,15 +174,15 @@ class TestLedger(unittest.TestCase):
 
     def test_qualified_play_is_not_auto_added(self):
         row = self.selected_row()
-        first, shadow = ledger.sync([row], [game()], {"bets": []}, {"calls": []})
+        first, shadow = ledger.sync([row], [game()], {"bets": []}, {"calls": []}, now=NOW.isoformat())
         self.assertEqual(first["bets"], [])
         self.assertEqual(first["mode"], "manual-browser")
         self.assertEqual(len(shadow["calls"]), 1)
 
     def test_shadow_call_is_duplicate_proof_and_graded(self):
         row = self.selected_row()
-        state, shadow = ledger.sync([row], [game()], {"bets": []}, {"calls": []})
-        _, shadow = ledger.sync([row], [game()], state, shadow)
+        state, shadow = ledger.sync([row], [game()], {"bets": []}, {"calls": []}, now=NOW.isoformat())
+        _, shadow = ledger.sync([row], [game()], state, shadow, now=NOW.isoformat())
         self.assertEqual(len(shadow["calls"]), 1)
         final = game(status="post", completed=True)
         final["away"]["score"], final["home"]["score"] = 75, 90

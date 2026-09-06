@@ -11,6 +11,8 @@ are both unavailable, the site publishes an honest no-live-data state.
 
 from __future__ import annotations
 
+from . import game_history
+
 import argparse
 import json
 import os
@@ -198,6 +200,12 @@ def build(target_date: str | None = None, days: int | None = None, offline: bool
     write_json(STATE / "ledger.json", ledger_state)
     write_json(STATE / "shadow.json", shadow_state)
     perf = ledger.performance(ledger_state, shadow_state, float(cfg["bankroll"]["starting"]))
+    for forecast_game in published_games:
+        proj = forecast_game["projection"]
+        forecast_game["p_home"] = model.normal_cdf(proj["margin"] / proj["spread_sigma"])
+    game_history.update(STATE / "model_accuracy.json", SITE / "accuracy.json",
+                        board, published_games, all_games, "WNBA",
+                        historical=shadow_state.get("calls", []))
 
     dates = sorted({game["date"] for game in published_games})
     current = selected.strftime("%Y-%m-%d")
