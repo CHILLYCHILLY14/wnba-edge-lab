@@ -3,11 +3,21 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 from pipeline import espn, ledger, model
 
 ROOT = Path(__file__).resolve().parents[1]
 CFG = json.loads((ROOT / "config" / "settings.json").read_text())
+
+
+NOW = datetime(2026, 8, 25, 18, tzinfo=timezone.utc)
+CLOCK = patch.object(model, "_utc_now", return_value=NOW)
+def setUpModule():
+    CLOCK.start()
+def tearDownModule():
+    CLOCK.stop()
 
 
 def game(game_id="1", date="2026-08-25", status="pre", completed=False):
@@ -22,6 +32,7 @@ def game(game_id="1", date="2026-08-25", status="pre", completed=False):
         "status": status,
         "completed": completed,
         "odds": {
+            "fetched_at": NOW.isoformat(),
             "book": "DraftKings",
             "quotes": {
                 "away_ml": {"price": 150, "line": None, "book": "DraftKings"},

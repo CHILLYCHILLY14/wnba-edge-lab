@@ -30,3 +30,11 @@ assert.equal(summary.settled, 1);
 assert.match(L.toCSV(settled.entries), /SEA @ NY/);
 
 console.log("WNBA manual ledger tests passed");
+
+// An archived final settles a wager even when the displayed slate is empty.
+const oldBet={game_id:"old",market:"ML",side:"home",price:-110,stake:10};
+const oldFinal={game_id:"old",completed:true,away:{score:71},home:{score:97}};
+const archiveResult=L.settleAll([oldBet],[oldFinal]);
+assert.equal(archiveResult.changed,1);
+assert.equal(archiveResult.entries[0].result,"Win");
+assert.equal(L.settleAll(archiveResult.entries,[]).changed,0);

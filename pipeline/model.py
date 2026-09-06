@@ -471,6 +471,29 @@ def _tier(edge: float, confidence: float, line_gap: float | None, price: float, 
     return "LEAN", None
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def quote_block_reason(game: dict, cfg: dict, now: datetime | None = None) -> str | None:
+    now = now or _utc_now()
+    try:
+        tipoff = datetime.fromisoformat(str(game.get("tipoff") or "").replace("Z", "+00:00"))
+        fetched = datetime.fromisoformat(str((game.get("odds") or {}).get("fetched_at") or "").replace("Z", "+00:00"))
+        if tipoff.tzinfo is None or fetched.tzinfo is None:
+            raise ValueError("timestamps must include timezone")
+    except (TypeError, ValueError):
+        return "Verified tipoff and odds timestamp required"
+    if tipoff <= now or game.get("completed") or game.get("status") != "pre":
+        return "Game has already started"
+    age = (now - fetched).total_seconds() / 3600
+    if age < -5 / 60:
+        return "Odds timestamp is in the future"
+    if age >= float(cfg["refresh"]["max_odds_age_hours"]):
+        return "Odds are stale; waiting for a live price refresh"
+    return None
+
+
 def _candidate(game: dict, projection: dict, quote_key: str, label: str, market: str,
                side: str, model_prob: float, fair_prob: float | None, cfg: dict) -> dict | None:
     quote = (((game.get("odds") or {}).get("quotes") or {}).get(quote_key))
@@ -489,6 +512,10 @@ def _candidate(game: dict, projection: dict, quote_key: str, label: str, market:
         (projection["total"] - projection["market_total"]) if projection["market_total"] is not None else None)
     tier, tier_note = _tier(edge, projection["confidence"], line_gap, price, cfg)
     reasons: list[str] = []
+    blocked = quote_block_reason(game, cfg)
+    if blocked:
+        tier = "AVOID"
+        reasons.append(blocked)
     filters = cfg["filters"]
     if fair_prob is None:
         tier = "AVOID"
@@ -536,6 +563,8 @@ def _candidate(game: dict, projection: dict, quote_key: str, label: str, market:
         "game_id": game["game_id"],
         "date": game["date"],
         "tipoff": game["tipoff"],
+        "odds_fetched_at": (game.get("odds") or {}).get("fetched_at"),
+        "max_odds_age_hours": float(cfg["refresh"]["max_odds_age_hours"]),
         "start_local": game["start_local"],
         "matchup": f'{game["away"]["abbr"]} @ {game["home"]["abbr"]}',
         "away": game["away"]["abbr"],
@@ -563,7 +592,7 @@ def _candidate(game: dict, projection: dict, quote_key: str, label: str, market:
         "tier_note": tier_note,
         "reasons": reasons,
         "kelly_raw": round(raw_kelly, 4),
-        "stake_before_daily_cap": round(requested, 2),
+        "stake_before_daily_cap": 0.0 if tier == "AVOID" else round(requested, 2),
         "stake": 0.0,
         "projection": projection,
     }

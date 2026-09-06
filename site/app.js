@@ -1,8 +1,8 @@
 const DATA="data/";
-const FILES=["board","games","summary","meta","index","performance","simulator","news","calibration"];
+const FILES=["board","games","summary","meta","index","performance","simulator","news","calibration","results"];
 const L=window.WNBALedger;
 const state={tab:"plays",tier:"PLAYS",date:null};
-let board=[],games=[],summary={},meta={},index={},performance={},simulator={teams:{}},news=[],calibration={},myBets=[];
+let board=[],games=[],summary={},meta={},index={},performance={},simulator={teams:{}},news=[],calibration={},results=[],myBets=[];
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const pct=(v,d=1)=>v==null?"—":`${(Number(v)*100).toFixed(d)}%`;
@@ -35,7 +35,8 @@ function setHealth(){
 }
 
 function renderKpis(){
-  const d=(summary.day_summary||{})[state.date]||{};
+  const plays=selectedPlays();
+  const d={...((summary.day_summary||{})[state.date]||{}),plays:plays.length,staked:plays.reduce((sum,row)=>sum+Number(row.stake),0)};
   const mine=mySummary();
   const items=[
     ["My bankroll",money(mine.bankroll),"confirmed wagers only",mine.profit>0?"pos":mine.profit<0?"neg":""],
@@ -192,6 +193,8 @@ function downloadLedger(name,text,type){const blob=new Blob([text],{type});const
 function bindLedgerActions(){
   document.querySelectorAll("[data-add]").forEach(button=>button.onclick=()=>{
     const row=board.find(item=>item.candidate_id===button.dataset.add);if(!row||isTracked(row))return;
+    const blocked=window.QuoteEligibility.blockReason(row,row.max_odds_age_hours??12);
+    if(blocked){window.alert(blocked);renderView();return;}
     const input=document.querySelector(`[data-stake="${CSS.escape(row.candidate_id)}"]`);const stake=Number(input?.value);
     if(!isFinite(stake)||stake<=0){window.alert("Enter the stake you actually placed.");return;}
     myBets.push(L.entryFrom(row,stake));saveMyBets();renderView();
@@ -209,14 +212,20 @@ function bindLedgerActions(){
   };
   const clear=document.querySelector("[data-clear-ledger]");if(clear)clear.onclick=()=>{if(window.confirm("Clear every wager from this browser ledger? Export first if you need a backup.")){myBets=[];saveMyBets();renderView();}};
 }
-function renderView(){renderTabs();renderKpis();const views={plays:playsView,board:boardView,schedule:scheduleView,sim:simulatorView,ledger:ledgerView,accuracy:accuracyView,model:modelView,sources:sourcesView};$("#view").innerHTML=(views[state.tab]||playsView)();bindLedgerActions();}
+function expireQuotes(){
+  board=board.map(row=>{
+    const reason=window.QuoteEligibility.blockReason(row,row.max_odds_age_hours??12);
+    return reason?{...row,tier:"AVOID",stake:0,reasons:[...new Set([...(row.reasons||[]),reason])]}:row;
+  });
+}
+function renderView(){expireQuotes();renderTabs();renderKpis();const views={plays:playsView,board:boardView,schedule:scheduleView,sim:simulatorView,ledger:ledgerView,accuracy:accuracyView,model:modelView,sources:sourcesView};$("#view").innerHTML=(views[state.tab]||playsView)();bindLedgerActions();}
 function setDate(value){if(!(index.dates||[]).includes(value))return;state.date=value;const url=new URL(location.href);url.searchParams.set("date",value);history.replaceState({},"",url);renderDateBar();renderView();}
 
 async function boot(){
   try{
-    const payload=await Promise.all(FILES.map(name=>fetch(`${DATA}${name}.json`,{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error(name);return r.json()})));
-    [board,games,summary,meta,index,performance,simulator,news,calibration]=payload;
-    myBets=L?L.load():[];if(L){const settled=L.settleAll(myBets,games);myBets=settled.entries;if(settled.changed)L.save(myBets);}
+    const payload=await Promise.all(FILES.map(name=>fetch(`${DATA}${name}.json`,{cache:"no-store"}).then(r=>{if(!r.ok){if(name==="results"&&r.status===404)return [];throw new Error(name)}return r.json()})));
+    [board,games,summary,meta,index,performance,simulator,news,calibration,results]=payload;
+    myBets=L?L.load():[];if(L){const settled=L.settleAll(myBets,[...games,...results]);myBets=settled.entries;if(settled.changed)L.save(myBets);}
     const requested=new URL(location.href).searchParams.get("date"),today=easternToday(),dates=index.dates||[];
     state.date=dates.includes(requested)?requested:dates.includes(today)?today:index.built_for||dates[0]||today;
     $("#stamp").innerHTML=`LIVE DATA · <b>${esc(new Date(meta.generated_at).toLocaleString())}</b>`;setHealth();renderDateBar();renderView();
@@ -225,3 +234,8 @@ async function boot(){
   }catch(error){$("#health").hidden=false;$("#health").className="health error";$("#health").textContent="The automatic data files could not be loaded.";$("#view").innerHTML=`<div class="empty"><b>No live model data available</b>No sample data will be substituted. The next scheduled refresh will try again.</div>`;}
 }
 boot();
+function refreshExpiredQuotes(){
+  if(meta.generated_at&&board.some(row=>row.tier!=="AVOID"&&window.QuoteEligibility.blockReason(row,row.max_odds_age_hours??12)))renderView();
+}
+setInterval(refreshExpiredQuotes,60000);
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)refreshExpiredQuotes();});

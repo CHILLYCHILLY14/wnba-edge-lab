@@ -82,6 +82,21 @@ def _line_move(game: dict, line_state: dict) -> dict:
     return output
 
 
+def settlement_results(previous: list[dict], games: list[dict]) -> list[dict]:
+    """Retain public final scores beyond the display window and season rollover."""
+    by_id = {str(game["game_id"]): game for game in previous}
+    for game in games:
+        away, home = game.get("away") or {}, game.get("home") or {}
+        if not game.get("completed") or away.get("score") is None or home.get("score") is None:
+            continue
+        by_id[str(game["game_id"])] = {
+            "game_id": str(game["game_id"]), "date": game["date"], "completed": True,
+            "away": {"abbr": away.get("abbr"), "score": away["score"]},
+            "home": {"abbr": home.get("abbr"), "score": home["score"]},
+        }
+    return sorted(by_id.values(), key=lambda game: (game["date"], str(game["game_id"])))
+
+
 def build(target_date: str | None = None, days: int | None = None, offline: bool = False) -> dict:
     cfg = read_json(ROOT / "config" / "settings.json", {})
     season = int(cfg.get("season") or datetime.now(ET).year)
@@ -260,6 +275,7 @@ def build(target_date: str | None = None, days: int | None = None, offline: bool
     outputs = {
         "board.json": board,
         "games.json": published_games,
+        "results.json": settlement_results(read_json(SITE / "results.json", []), all_games),
         "summary.json": summary,
         "meta.json": meta,
         "index.json": index,
